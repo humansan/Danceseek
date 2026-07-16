@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         return self.data_dir / "setlists"
 
     @property
+    def llm_inputs_dir(self) -> Path:
+        return self.data_dir / "llm_inputs"
+
+    @property
     def index_path(self) -> Path:
         return self.data_dir / "index.json"
 

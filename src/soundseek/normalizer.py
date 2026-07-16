@@ -9,10 +9,14 @@ not trusted from the model.
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openrouter import ChatOpenRouter
 
 from .config import settings
+from .fetcher import url_digest
 from .models import ParsedTrack, ParsedTracklist, RawSetlistPage
 
 SYSTEM_PROMPT = """You are a music metadata normalizer for DJ setlists scraped from 1001tracklists.
@@ -82,6 +86,27 @@ def _validate_round_trip(page: RawSetlistPage, tracks: list[ParsedTrack]) -> Non
         )
 
 
+def _dump_llm_input(page: RawSetlistPage, mode: str, user_content: str):
+    """Persist exactly what goes to the LLM, for debugging/sanity checks.
+
+    Keyed by the same URL digest as the raw_html cache, so the chain
+    raw_html/<digest>.html -> llm_inputs/<digest>.json -> setlists/<id>.json
+    can be followed for any URL. Returns the file path.
+    """
+    settings.llm_inputs_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "source_url": page.source_url,
+        "written_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "model": settings.llm_model,
+        "mode": mode,  # "rows" (normal) or "fallback_text" (selector failure)
+        "extracted_page": page.model_dump(),
+        "llm_user_content": user_content,
+    }
+    path = settings.llm_inputs_dir / f"{url_digest(page.source_url)}.json"
+    path.write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
 def _apply_played_with(page: RawSetlistPage, tracks: list[ParsedTrack]) -> None:
     """`played_with` comes from the DOM's "w/" markers, not the model:
     a w/ row is layered over the nearest preceding non-w/ track."""
@@ -103,6 +128,7 @@ def normalize(page: RawSetlistPage) -> list[ParsedTrack]:
             [("system", SYSTEM_PROMPT), ("user", USER_PROMPT)]
         )
         rows_text = "\n".join(f"{r.position} | {r.raw_text}" for r in page.rows)
+        _dump_llm_input(page, "rows", rows_text)
         chain = prompt | llm
         result: ParsedTracklist = chain.invoke(
             {"count": len(page.rows), "rows": rows_text}
@@ -115,6 +141,7 @@ def normalize(page: RawSetlistPage) -> list[ParsedTrack]:
         prompt = ChatPromptTemplate.from_messages(
             [("system", FALLBACK_SYSTEM_PROMPT), ("user", FALLBACK_USER_PROMPT)]
         )
+        _dump_llm_input(page, "fallback_text", page.fallback_text)
         chain = prompt | llm
         result = chain.invoke({"text": page.fallback_text})
         if not result.tracks:

@@ -54,9 +54,13 @@ def validate_url(url: str) -> None:
         )
 
 
+def url_digest(url: str) -> str:
+    """Short stable hash used to key per-URL files (raw_html, llm_inputs)."""
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+
+
 def cache_path(url: str):
-    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-    return settings.raw_html_dir / f"{digest}.html"
+    return settings.raw_html_dir / f"{url_digest(url)}.html"
 
 
 def _looks_blocked(html: str) -> bool:

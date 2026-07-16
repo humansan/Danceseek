@@ -1,7 +1,15 @@
+import json
+
 import pytest
 
+from soundseek.config import settings
 from soundseek.models import ParsedTrack, RawSetlistPage, RawTrackRow
-from soundseek.normalizer import NormalizationError, _apply_played_with, _validate_round_trip
+from soundseek.normalizer import (
+    NormalizationError,
+    _apply_played_with,
+    _dump_llm_input,
+    _validate_round_trip,
+)
 
 
 def _page(rows):
@@ -41,6 +49,22 @@ class TestValidateRoundTrip:
         page = _page([_row(1, "A - B"), _row(2, "C - D")])
         with pytest.raises(NormalizationError):
             _validate_round_trip(page, [_track(2, "C - D"), _track(1, "A - B")])
+
+
+class TestDumpLlmInput:
+    def test_writes_debug_record(self, tmp_path):
+        original = settings.data_dir
+        settings.data_dir = tmp_path
+        try:
+            page = _page([_row(1, "A - B")])
+            path = _dump_llm_input(page, "rows", "1 | A - B")
+            record = json.loads(path.read_text(encoding="utf-8"))
+        finally:
+            settings.data_dir = original
+        assert record["mode"] == "rows"
+        assert record["llm_user_content"] == "1 | A - B"
+        assert record["source_url"] == page.source_url
+        assert record["extracted_page"]["rows"][0]["raw_text"] == "A - B"
 
 
 class TestApplyPlayedWith:
