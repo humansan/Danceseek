@@ -1,1 +1,13 @@
 docs/
+
+# Python
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# Secrets
+.env
+
+# Local data (scraped HTML, setlists, browser profile)
+data/
