@@ -39,6 +39,7 @@ def _track_table(setlist: Setlist) -> Table:
     table.add_column("title")
     table.add_column("remix", style="cyan")
     table.add_column("flags", style="magenta")
+    table.add_column("res", style="green")  # resolution: S/Y/L per platform
     for t in setlist.tracks:
         flags = []
         if t.is_id:
@@ -55,8 +56,22 @@ def _track_table(setlist: Setlist) -> Table:
             t.title or ("?" if t.is_id else t.raw_text),
             t.remix or "",
             " ".join(flags),
+            _res_cell(t.resolution),
         )
     return table
+
+
+def _res_cell(res) -> str:
+    if res is None:
+        return ""
+    if res.status == "unreleased":
+        return "unrel"
+    if res.status == "no_match":
+        return "—"
+    platforms = "".join(
+        letter for letter, match in (("S", res.spotify), ("Y", res.youtube), ("L", res.lastfm)) if match
+    )
+    return f"{platforms} {res.confidence:.2f}".strip()
 
 
 @app.command()
@@ -79,6 +94,42 @@ def ingest(
     if already:
         console.print("[yellow]Already ingested (use --force to re-ingest):[/yellow]")
     _summarize(setlist)
+    console.print(f"  file: {store.setlist_path(setlist.id)}")
+
+
+@app.command()
+def resolve(
+    ref: str = typer.Argument(help="Setlist id or source URL"),
+    force: bool = typer.Option(False, "--force", help="Re-resolve tracks that already have a resolution"),
+    no_agent: bool = typer.Option(False, "--no-agent", help="Cascade only, skip the LLM agent fallback"),
+    limit: int = typer.Option(None, "--limit", help="Debug: resolve only the first N unresolved tracks"),
+) -> None:
+    """Resolve a stored setlist's tracks to Spotify / YouTube / Last.fm."""
+    from .resolver.resolve import resolve_setlist  # lazy: heavy imports
+
+    try:
+        setlist = store.load_by_url(ref) if ref.startswith("http") else store.load(ref)
+    except FileNotFoundError:
+        setlist = None
+    if setlist is None:
+        console.print(f"[red]No stored setlist for {ref} — ingest it first.[/red]")
+        raise typer.Exit(1)
+
+    summary = resolve_setlist(setlist, force=force, use_agent=not no_agent, limit=limit)
+
+    for warning in summary.warnings:
+        console.print(f"[yellow]warning: {warning}[/yellow]")
+    console.print(
+        f"\n[bold]{setlist.title}[/bold]\n"
+        f"  [green]{summary.resolved} resolved[/green]"
+        f" | {summary.partial} partial"
+        f" | {summary.no_match} no match"
+        f" | {summary.unreleased} unreleased"
+        f" | {summary.skipped} skipped (already done)"
+    )
+    console.print(
+        f"  registry cache hits: {summary.registry_hits} | agent runs: {summary.agent_runs}"
+    )
     console.print(f"  file: {store.setlist_path(setlist.id)}")
 
 
