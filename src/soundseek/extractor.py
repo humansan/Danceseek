@@ -11,6 +11,9 @@ Observed markup (2026-07):
       meta[itemprop='name']                 clean "Artist - Title (Remix)"
       span.trackValue                       visible text (fallback, richer)
       meta[itemprop='genre']                per-track genre
+    div.tlpItem.tlpSubTog                   mashup COMPONENT sub-row (chain-link
+                                            icon, no track number) — belongs to
+                                            the preceding parent row (subPosTog)
     h1#pageTitle / og:title                 "DJ @ Event, City, Country YYYY-MM-DD"
 """
 
@@ -83,6 +86,17 @@ def _row_from_item(item: Tag, position: int) -> RawTrackRow | None:
     )
 
 
+def _component_text(item: Tag) -> str | None:
+    """Raw text of a mashup component sub-row (same fields as a normal row)."""
+    track_value = item.select_one("span.trackValue")
+    if track_value is not None:
+        return _clean(track_value.get_text(" ", strip=True))
+    meta_name = item.select_one("meta[itemprop='name']")
+    if meta_name is not None and meta_name.get("content"):
+        return _clean(str(meta_name["content"]))
+    return None
+
+
 def _parse_page_title(soup: BeautifulSoup) -> tuple[str | None, list[str], str | None, str | None]:
     """Return (title, dj_names, event, date_recorded) from the page header."""
     el = soup.select_one("h1#pageTitle") or soup.find("meta", property="og:title")
@@ -109,6 +123,13 @@ def extract(html: str, source_url: str) -> RawSetlistPage:
     # Keep DOM order; data-trno can have gaps (deleted rows), so number ourselves.
     position = 0
     for item in items:
+        classes = item.get("class") or []
+        if "tlpSubTog" in classes:
+            # Explicit mashup component sub-row: attach to the parent row.
+            raw = _component_text(item)
+            if raw and rows:
+                rows[-1].component_texts.append(raw)
+            continue
         position += 1
         row = _row_from_item(item, position)
         if row is None:

@@ -34,6 +34,9 @@ class RawTrackRow(BaseModel):
     cue_time: str | None = None  # e.g. "0:00", "1:02:30"; None if not listed
     raw_text: str  # verbatim, e.g. "Skrillex & Fred again.. - Rumble"
     is_played_with: bool = False  # row was marked "w/" (layered over previous)
+    # 1001TL sometimes lists a mashup's component tracks as explicit sub-rows
+    # (chain-link rows, class tlpSubTog). They belong to this row, not the list.
+    component_texts: list[str] = Field(default_factory=list)
 
 
 class RawSetlistPage(BaseModel):
