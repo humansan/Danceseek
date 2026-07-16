@@ -52,6 +52,7 @@ def _row_from_item(item: Tag, position: int) -> RawTrackRow | None:
     num_el = item.select_one("span[id$='_tracknumber_value']")
     number = num_el.get_text(strip=True) if num_el else ""
     is_played_with = number.lower() == "w/"
+    source_track_number = int(number) if number.isdigit() else None
 
     meta_name = item.select_one("meta[itemprop='name']")
     track_value = item.select_one("span.trackValue")
@@ -75,6 +76,7 @@ def _row_from_item(item: Tag, position: int) -> RawTrackRow | None:
 
     return RawTrackRow(
         position=position,
+        source_track_number=source_track_number,
         cue_time=cue,
         raw_text=raw_text,
         is_played_with=is_played_with,

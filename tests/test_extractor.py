@@ -41,6 +41,15 @@ class TestToronto:
         # positions are contiguous and ordered
         assert [r.position for r in page.rows] == list(range(1, 35))
 
+    def test_source_track_numbers(self, page):
+        # 34 rows = 29 numbered tracks + 5 "w/" rows; site numbering skips w/
+        numbered = [r.source_track_number for r in page.rows if not r.is_played_with]
+        assert numbered == list(range(1, 30))
+        assert all(r.source_track_number is None for r in page.rows if r.is_played_with)
+        # positions diverge from site numbers once a w/ row has appeared
+        last = page.rows[-1]
+        assert (last.position, last.source_track_number) == (34, 29)
+
     def test_played_with_rows(self, page):
         w_rows = [r for r in page.rows if r.is_played_with]
         assert len(w_rows) == 5

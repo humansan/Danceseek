@@ -32,7 +32,8 @@ def _summarize(setlist: Setlist) -> None:
 
 def _track_table(setlist: Setlist) -> Table:
     table = Table(title=setlist.title or setlist.source_url)
-    table.add_column("#", justify="right", style="dim")
+    table.add_column("#", justify="right", style="dim")  # 1001TL's number ("w/" rows blank)
+    table.add_column("row", justify="right", style="dim")  # our unique position
     table.add_column("cue", style="dim")
     table.add_column("artists")
     table.add_column("title")
@@ -47,6 +48,7 @@ def _track_table(setlist: Setlist) -> Table:
         if t.mashup_components:
             flags.append("mashup")
         table.add_row(
+            str(t.source_track_number) if t.source_track_number is not None else "w/",
             str(t.position),
             t.cue_time or "",
             ", ".join(t.artists),

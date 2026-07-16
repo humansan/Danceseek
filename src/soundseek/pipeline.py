@@ -10,7 +10,7 @@ from .normalizer import normalize
 
 
 def _assemble(page: RawSetlistPage, tracks) -> Setlist:
-    cue_by_position = {r.position: r.cue_time for r in page.rows}
+    rows_by_position = {r.position: r for r in page.rows}
     return Setlist(
         source_url=page.source_url,
         title=page.title,
@@ -22,7 +22,12 @@ def _assemble(page: RawSetlistPage, tracks) -> Setlist:
         tracks=[
             SetlistTrack(
                 **track.model_dump(),
-                cue_time=cue_by_position.get(track.position),
+                source_track_number=(
+                    row.source_track_number
+                    if (row := rows_by_position.get(track.position))
+                    else None
+                ),
+                cue_time=row.cue_time if row else None,
             )
             for track in tracks
         ],
@@ -55,6 +60,7 @@ def ingest(url: str, force: bool = False, skip_llm: bool = False) -> Setlist:
             tracks=[
                 SetlistTrack(
                     position=r.position,
+                    source_track_number=r.source_track_number,
                     raw_text=r.raw_text,
                     cue_time=r.cue_time,
                     played_with=-1 if r.is_played_with else None,

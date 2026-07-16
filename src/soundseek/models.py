@@ -24,7 +24,8 @@ SCHEMA_VERSION = 1
 class RawTrackRow(BaseModel):
     """One tracklist row exactly as scraped from the page."""
 
-    position: int
+    position: int  # our unique row index in page order (w/ rows included)
+    source_track_number: int | None = None  # the number 1001TL displays; None on "w/" rows
     cue_time: str | None = None  # e.g. "0:00", "1:02:30"; None if not listed
     raw_text: str  # verbatim, e.g. "Skrillex & Fred again.. - Rumble"
     is_played_with: bool = False  # row was marked "w/" (layered over previous)
@@ -101,6 +102,7 @@ class ParsedTracklist(BaseModel):
 class SetlistTrack(ParsedTrack):
     """A parsed track plus scrape context and the (future) resolution slot."""
 
+    source_track_number: int | None = None  # 1001TL's displayed number; None on "w/" rows
     cue_time: str | None = None
     # Reserved for Step 2 (resolution agent): spotify_id, youtube_id, confidence...
     resolution: dict | None = None
