@@ -53,6 +53,8 @@ class MashupComponent(BaseModel):
 
     artists: list[str] = Field(default_factory=list)
     title: str | None = None
+    # Reserved for Step 2: each component resolves to its own platform track.
+    resolution: dict | None = None
 
 
 class ParsedTrack(BaseModel):

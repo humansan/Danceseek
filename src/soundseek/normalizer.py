@@ -10,7 +10,7 @@ not trusted from the model.
 from __future__ import annotations
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openrouter import ChatOpenRouter
 
 from .config import settings
 from .models import ParsedTrack, ParsedTracklist, RawSetlistPage
@@ -50,8 +50,12 @@ class NormalizationError(RuntimeError):
 
 
 def _build_llm():
-    llm = ChatGoogleGenerativeAI(model=settings.llm_model, temperature=0)
-    return llm.with_structured_output(ParsedTracklist).with_retry(stop_after_attempt=3)
+    llm = ChatOpenRouter(model=settings.llm_model, temperature=0)
+    # json_schema (not the default function_calling): lightweight models like
+    # Gemma have no native tool calling, but OpenRouter can enforce a JSON
+    # schema on the response for them.
+    structured = llm.with_structured_output(ParsedTracklist, method="json_schema")
+    return structured.with_retry(stop_after_attempt=3)
 
 
 def _validate_round_trip(page: RawSetlistPage, tracks: list[ParsedTrack]) -> None:

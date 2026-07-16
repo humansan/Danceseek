@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Expose non-prefixed vars (GOOGLE_API_KEY) to libraries that read os.environ.
+# Expose non-prefixed vars (OPENROUTER_API_KEY) to libraries that read os.environ.
 load_dotenv(PROJECT_ROOT / ".env")
 
 
@@ -19,8 +19,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM (GOOGLE_API_KEY is read directly by langchain-google-genai)
-    llm_model: str = "gemini-3.1-flash-lite"
+    # LLM via OpenRouter (OPENROUTER_API_KEY is read directly by langchain-openrouter)
+    llm_model: str = "google/gemma-4-31b-it:free"
 
     # Storage layout
     data_dir: Path = PROJECT_ROOT / "data"

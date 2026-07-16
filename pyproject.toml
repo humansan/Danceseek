@@ -5,7 +5,7 @@ description = "SoundSeek v0 - 1001tracklists setlist ingestor"
 requires-python = ">=3.12"
 dependencies = [
     "langchain>=0.3",
-    "langchain-google-genai>=2.0",
+    "langchain-openrouter>=0.1",
     "playwright>=1.49",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
