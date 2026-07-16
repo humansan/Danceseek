@@ -78,6 +78,18 @@ def _validate_round_trip(page: RawSetlistPage, tracks: list[ParsedTrack]) -> Non
         )
 
 
+def _apply_played_with(page: RawSetlistPage, tracks: list[ParsedTrack]) -> None:
+    """`played_with` comes from the DOM's "w/" markers, not the model:
+    a w/ row is layered over the nearest preceding non-w/ track."""
+    last_main_position: int | None = None
+    for row, track in zip(page.rows, tracks):
+        if row.is_played_with:
+            track.played_with = last_main_position
+        else:
+            track.played_with = None
+            last_main_position = row.position
+
+
 def normalize(page: RawSetlistPage) -> list[ParsedTrack]:
     """Normalize a scraped page's rows into structured tracks."""
     llm = _build_llm()
@@ -92,16 +104,7 @@ def normalize(page: RawSetlistPage) -> list[ParsedTrack]:
             {"count": len(page.rows), "rows": rows_text}
         )
         _validate_round_trip(page, result.tracks)
-
-        # `played_with` comes from the DOM's "w/" markers, not the model:
-        # a w/ row is layered over the nearest preceding non-w/ track.
-        last_main_position: int | None = None
-        for row, track in zip(page.rows, result.tracks):
-            if row.is_played_with:
-                track.played_with = last_main_position
-            else:
-                track.played_with = None
-                last_main_position = row.position
+        _apply_played_with(page, result.tracks)
         return result.tracks
 
     if page.fallback_text:
