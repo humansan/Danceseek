@@ -66,9 +66,9 @@ def _row_from_item(item: Tag, position: int) -> RawTrackRow | None:
 
     cue_input = item.select_one("input[id$='_cue_seconds']")
     cue_seconds = str(cue_input["value"]) if cue_input and cue_input.get("value") else None
-    # The site stores unknown cues as 0, and "w/" rows always carry 0; only the
-    # very first track can legitimately start at 0:00.
-    if is_played_with or (cue_seconds == "0" and position != 1):
+    # The site stores unknown cues as 0; only the very first track can
+    # legitimately start at 0:00. "w/" rows often carry real cues — keep them.
+    if cue_seconds == "0" and position != 1:
         cue = None
     else:
         cue = _format_cue(cue_seconds)

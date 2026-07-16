@@ -44,7 +44,11 @@ class TestToronto:
     def test_played_with_rows(self, page):
         w_rows = [r for r in page.rows if r.is_played_with]
         assert len(w_rows) == 5
-        assert all(r.cue_time is None for r in w_rows)
+        # w/ rows can carry real cue times (needed for scrobbling)...
+        assert w_rows[0].cue_time == "5:30"
+        assert w_rows[1].cue_time == "7:40"
+        # ...but the site's placeholder 0 must still come back as None
+        assert w_rows[2].cue_time is None
 
     def test_id_row_kept_verbatim(self, page):
         assert page.rows[-1].raw_text == "Fred again.. - ID"
