@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # LLM (GOOGLE_API_KEY is read directly by langchain-google-genai)
-    llm_model: str = "gemini-2.5-flash"
+    llm_model: str = "gemini-3.1-flash-lite"
 
     # Storage layout
     data_dir: Path = PROJECT_ROOT / "data"
