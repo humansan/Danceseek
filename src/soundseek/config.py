@@ -2,9 +2,13 @@
 
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# Expose non-prefixed vars (GOOGLE_API_KEY) to libraries that read os.environ.
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 class Settings(BaseSettings):
