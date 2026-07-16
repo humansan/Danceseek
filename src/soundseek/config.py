@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = 60.0
     headless: bool = True
 
+    # Resolution (Step 2)
+    resolve_min_confidence: float = 0.75  # gate for STORING a platform match
+    resolve_agent_band: float = 0.45  # scores in [band, min) are ambiguous -> agent
+    agent_max_iterations: int = 8
+    resolve_save_every: int = 5  # persist setlist every N resolved tracks
+    resolve_api_delay_seconds: float = 0.3  # politeness between API calls
+
     @property
     def raw_html_dir(self) -> Path:
         return self.data_dir / "raw_html"
@@ -41,6 +48,14 @@ class Settings(BaseSettings):
     @property
     def llm_inputs_dir(self) -> Path:
         return self.data_dir / "llm_inputs"
+
+    @property
+    def tracks_path(self) -> Path:
+        return self.data_dir / "tracks.json"
+
+    @property
+    def resolution_logs_dir(self) -> Path:
+        return self.data_dir / "resolution_logs"
 
     @property
     def index_path(self) -> Path:

@@ -59,8 +59,8 @@ class MashupComponent(BaseModel):
 
     artists: list[str] = Field(default_factory=list)
     title: str | None = None
-    # Reserved for Step 2: each component resolves to its own platform track.
-    resolution: dict | None = None
+    # Filled by Step 2: each component resolves to its own platform track.
+    resolution: "Resolution | None" = None
 
 
 class ParsedTrack(BaseModel):
@@ -175,8 +175,8 @@ class SetlistTrack(ParsedTrack):
 
     source_track_number: int | None = None  # 1001TL's displayed number; None on "w/" rows
     cue_time: str | None = None
-    # Reserved for Step 2 (resolution agent): spotify_id, youtube_id, confidence...
-    resolution: dict | None = None
+    # Filled by Step 2 (resolution): platform matches + registry track id.
+    resolution: Resolution | None = None
 
 
 class ParserInfo(BaseModel):
@@ -195,8 +195,6 @@ class Setlist(BaseModel):
     event: str | None = None
     date_recorded: str | None = None
     genres: list[str] = Field(default_factory=list)
-    scraped_at: str = Field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
-    )
+    scraped_at: str = Field(default_factory=_utcnow)
     parser: ParserInfo
     tracks: list[SetlistTrack] = Field(default_factory=list)
