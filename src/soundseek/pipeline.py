@@ -1,0 +1,70 @@
+"""The ingest pipeline: URL -> fetch -> extract -> normalize -> persist."""
+
+from __future__ import annotations
+
+from . import fetcher, store
+from .config import settings
+from .extractor import extract
+from .models import ParserInfo, RawSetlistPage, Setlist, SetlistTrack
+from .normalizer import normalize
+
+
+def _assemble(page: RawSetlistPage, tracks) -> Setlist:
+    cue_by_position = {r.position: r.cue_time for r in page.rows}
+    return Setlist(
+        source_url=page.source_url,
+        title=page.title,
+        dj_names=page.dj_names,
+        event=page.event,
+        date_recorded=page.date_recorded,
+        genres=page.genres,
+        parser=ParserInfo(model=settings.llm_model),
+        tracks=[
+            SetlistTrack(
+                **track.model_dump(),
+                cue_time=cue_by_position.get(track.position),
+            )
+            for track in tracks
+        ],
+    )
+
+
+def ingest(url: str, force: bool = False, skip_llm: bool = False) -> Setlist:
+    """Ingest a 1001tracklists URL. Returns the stored (or existing) setlist.
+
+    force:    re-fetch and re-parse even if the URL was already ingested.
+    skip_llm: debug mode — store raw rows without LLM normalization.
+    """
+    if not force:
+        existing = store.load_by_url(url)
+        if existing is not None:
+            return existing
+
+    html = fetcher.fetch(url, force=force)
+    page = extract(html, url)
+
+    if skip_llm:
+        setlist = Setlist(
+            source_url=page.source_url,
+            title=page.title,
+            dj_names=page.dj_names,
+            event=page.event,
+            date_recorded=page.date_recorded,
+            genres=page.genres,
+            parser=ParserInfo(model="none (--no-llm)"),
+            tracks=[
+                SetlistTrack(
+                    position=r.position,
+                    raw_text=r.raw_text,
+                    cue_time=r.cue_time,
+                    played_with=-1 if r.is_played_with else None,
+                )
+                for r in page.rows
+            ],
+        )
+        return setlist  # debug output is not persisted
+
+    tracks = normalize(page)
+    setlist = _assemble(page, tracks)
+    store.save(setlist)
+    return setlist
