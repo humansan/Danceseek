@@ -1,0 +1,31 @@
+[project]
+name = "soundseek"
+version = "0.1.0"
+description = "SoundSeek v0 - 1001tracklists setlist ingestor"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain>=0.3",
+    "langchain-google-genai>=2.0",
+    "playwright>=1.49",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "typer>=0.15",
+    "rich>=13.0",
+]
+
+[project.scripts]
+soundseek = "soundseek.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/soundseek"]
