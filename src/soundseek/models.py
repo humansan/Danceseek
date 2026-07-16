@@ -10,10 +10,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 SCHEMA_VERSION = 1
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +97,72 @@ class ParsedTracklist(BaseModel):
     """LLM output: the full normalized tracklist."""
 
     tracks: list[ParsedTrack] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Resolution (Step 2): platform matches + canonical track registry
+# ---------------------------------------------------------------------------
+
+
+class PlatformMatch(BaseModel):
+    """One accepted Spotify track / YouTube video match."""
+
+    id: str  # Spotify track id / YouTube video id
+    title: str
+    artists: list[str] = Field(default_factory=list)  # uploader for YouTube
+    url: str
+    duration_ms: int | None = None
+
+
+class LastfmMatch(BaseModel):
+    """The canonical Last.fm identity — these exact strings are the future
+    scrobble payload (Last.fm's highest-scrobbled entry, typically 1 artist)."""
+
+    artist: str
+    track: str
+    mbid: str | None = None
+    listeners: int = 0
+    url: str | None = None
+
+
+ResolutionStatus = Literal["resolved", "partial", "no_match", "unreleased"]
+
+
+class Resolution(BaseModel):
+    """Outcome of resolving one track/component against the platforms.
+
+    Precision over recall: a platform field is populated ONLY when the match
+    cleared the confidence threshold. Empty fields on bootlegs/edits are the
+    correct outcome, not a failure ("no_match"). A null Resolution slot on a
+    track means resolution was never attempted.
+    """
+
+    status: ResolutionStatus
+    track_id: str | None = None  # canonical registry track (data/tracks.json)
+    spotify: PlatformMatch | None = None
+    youtube: PlatformMatch | None = None
+    lastfm: LastfmMatch | None = None
+    confidence: float = 0.0
+    method: Literal["cascade", "agent", "registry", "skip"] = "cascade"
+    resolved_at: str = Field(default_factory=_utcnow)
+    notes: str | None = None
+
+
+class TrackRecord(BaseModel):
+    """A row in the canonical track registry (the future `Tracks` table)."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    artists: list[str] = Field(default_factory=list)
+    title: str | None = None
+    remix: str | None = None
+    is_unreleased: bool = False
+    spotify_id: str | None = None
+    youtube_id: str | None = None
+    lastfm_artist: str | None = None
+    lastfm_track: str | None = None
+    mbid: str | None = None
+    created_at: str = Field(default_factory=_utcnow)
+    updated_at: str = Field(default_factory=_utcnow)
 
 
 # ---------------------------------------------------------------------------
