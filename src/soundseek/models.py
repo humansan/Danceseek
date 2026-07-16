@@ -58,10 +58,11 @@ class RawSetlistPage(BaseModel):
 
 
 class MashupComponent(BaseModel):
-    """One side of a mashup ("A vs. B")."""
+    """One component track of a mashup."""
 
     artists: list[str] = Field(default_factory=list)
     title: str | None = None
+    remix: str | None = None
     # Filled by Step 2: each component resolves to its own platform track.
     resolution: "Resolution | None" = None
 

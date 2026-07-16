@@ -83,6 +83,37 @@ class TestTwitch:
         assert all(r.cue_time != "0:00" for r in page.rows if r.position != 1)
 
 
+@pytest.fixture(scope="module")
+def edc_page():
+    return extract(_load("edc.html"), "https://example/tracklist/edc/x.html")
+
+
+class TestEdcMashupComponents:
+    @pytest.fixture
+    def page(self, edc_page):
+        return edc_page
+
+    def test_component_subrows_folded_into_parent(self, page):
+        mashup = next(r for r in page.rows if "She A Freak Edit" in r.raw_text)
+        assert mashup.component_texts == [
+            "Empire Of The Sun - Walking On A Dream",
+            "Armin van Buuren & Skytech - She A Freak",
+        ]
+
+    def test_components_are_not_independent_rows(self, page):
+        texts = [r.raw_text for r in page.rows]
+        assert "Empire Of The Sun - Walking On A Dream" not in texts
+        assert "Armin van Buuren & Skytech - She A Freak" not in texts
+
+    def test_positions_still_contiguous(self, page):
+        assert [r.position for r in page.rows] == list(range(1, len(page.rows) + 1))
+
+    def test_numbered_rows_match_site_numbering(self, page):
+        # sub-rows don't consume site numbers; numbering stays aligned
+        bounty = next(r for r in page.rows if r.raw_text.startswith("Bountyhunter"))
+        assert bounty.source_track_number == 4
+
+
 def test_non_tracklist_page_raises():
     with pytest.raises(ExtractionError):
         extract("<html><body><p>hello</p></body></html>", "https://example/tracklist/x/y.html")

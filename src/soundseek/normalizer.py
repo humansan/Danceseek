@@ -28,7 +28,8 @@ You receive numbered track rows exactly as they appear on the site. For each row
 - `title`: the track title WITHOUT any remix/version suffix and without the artist part.
 - `remix`: parenthesized or suffixed version info, e.g. "Extended Mix", "Hamdi Remix", "Skrillex & Fred again.. Edit", "Fred again.. Mashup". Null if the parenthetical is part of the actual title (e.g. "Danielle (Smile On My Face)" — subtitle, not a remix) or absent.
 - Unreleased/unidentified tracks: if the artist and/or title is literally "ID", set `is_id` to true. For "ID - ID" leave `artists` empty and `title` null. For "Artist - ID" keep the artists but leave `title` null. Never guess what an ID track might be.
-- Mashups written as "A vs. B" (two tracks played as one): fill `mashup_components` with one entry per component track, best-effort splitting the artists/titles across the "vs.". Leave `mashup_components` empty for normal tracks.
+- Mashup components: some rows are followed by indented `component:` lines — these are the mashup's component tracks exactly as 1001tracklists lists them. For such rows, fill `mashup_components` with one entry per component line IN ORDER (split each line into artists/title/remix by the same rules). Never invent components beyond the given lines.
+- If a row's text contains "vs." (a mashup) but has NO component lines, derive `mashup_components` best-effort by splitting the artists/titles across the "vs.". Leave `mashup_components` empty for normal tracks.
 - Set `played_with` to null always (it is computed elsewhere).
 - Never add tracks, drop tracks, or reorder. Output exactly one entry per input row, in the same order.
 - Never use outside knowledge to "fix" names — only restructure what is written."""
@@ -82,6 +83,11 @@ def _validate_round_trip(page: RawSetlistPage, tracks: list[ParsedTrack]) -> Non
                 f"  row {row.position}: expected {row.raw_text!r}, "
                 f"got position={track.position} raw_text={track.raw_text!r}"
             )
+        elif row.component_texts and len(track.mashup_components) != len(row.component_texts):
+            mismatches.append(
+                f"  row {row.position}: {len(row.component_texts)} explicit components "
+                f"given, model returned {len(track.mashup_components)}"
+            )
     if mismatches:
         raise NormalizationError(
             "LLM output does not round-trip the input rows:\n" + "\n".join(mismatches)
@@ -129,7 +135,11 @@ def normalize(page: RawSetlistPage) -> list[ParsedTrack]:
         prompt = ChatPromptTemplate.from_messages(
             [("system", SYSTEM_PROMPT), ("user", USER_PROMPT)]
         )
-        rows_text = "\n".join(f"{r.position} | {r.raw_text}" for r in page.rows)
+        lines = []
+        for r in page.rows:
+            lines.append(f"{r.position} | {r.raw_text}")
+            lines.extend(f"    component: {c}" for c in r.component_texts)
+        rows_text = "\n".join(lines)
         _dump_llm_input(page, "rows", rows_text)
         chain = prompt | llm
         result: ParsedTracklist = chain.invoke(
