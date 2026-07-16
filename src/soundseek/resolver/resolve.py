@@ -105,9 +105,11 @@ def _resolve_unit(
     summary: ResolveSummary,
     use_agent: bool,
     log_path,
+    force: bool = False,
 ) -> Resolution:
-    # 1. Registry cache (skip for mashup rows — they aren't registry entities)
-    if unit.kind != "mashup_row":
+    # 1. Registry cache (skip for mashup rows — they aren't registry entities;
+    #    --force bypasses the cache so a re-resolve actually re-searches)
+    if unit.kind != "mashup_row" and not force:
         cached = registry.lookup(unit.artists, unit.title, unit.remix)
         if cached is not None:
             rebuilt = registry.resolution_from_record(cached)
@@ -214,7 +216,7 @@ def resolve_setlist(
     log_path = settings.resolution_logs_dir / f"{url_digest(setlist.source_url)}.jsonl"
 
     def resolve(unit: Unit) -> Resolution:
-        return _resolve_unit(unit, clients, registry, summary, use_agent, log_path)
+        return _resolve_unit(unit, clients, registry, summary, use_agent, log_path, force=force)
 
     processed = 0
     since_save = 0

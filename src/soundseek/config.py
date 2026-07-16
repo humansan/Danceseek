@@ -30,10 +30,15 @@ class Settings(BaseSettings):
     fetch_timeout_seconds: float = 60.0
     headless: bool = True
 
+    # LLM output caps (ChatOpenRouter otherwise requests a huge max_tokens,
+    # which OpenRouter rejects against low credit balances)
+    llm_max_tokens: int = 16384  # normalizer: must fit a full tracklist JSON
+    agent_max_tokens: int = 2048  # agent: single tool call / small verdict per turn
+
     # Resolution (Step 2)
     resolve_min_confidence: float = 0.75  # gate for STORING a platform match
     resolve_agent_band: float = 0.45  # scores in [band, min) are ambiguous -> agent
-    agent_max_iterations: int = 8
+    agent_max_iterations: int = 4  # tool-call budget per ambiguous track
     resolve_save_every: int = 5  # persist setlist every N resolved tracks
     resolve_api_delay_seconds: float = 0.3  # politeness between API calls
 

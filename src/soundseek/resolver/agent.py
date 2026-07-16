@@ -23,8 +23,10 @@ from .cascade import CascadeResult, Unit
 
 SYSTEM_PROMPT = """You are a music metadata resolver for DJ setlist tracks scraped from 1001tracklists. A deterministic matcher already tried and got ambiguous results; your job is to settle it.
 
+You have a hard budget of 4 tool calls total. Spend them wisely, then conclude — an answer with nulls is always better than running out of budget.
+
 Search strategy:
-- If a search returns nothing useful, reformulate: drop qualifiers like "Extended Mix", try fewer artists, try the remixer as the artist.
+- If a search returns nothing useful, reformulate ONCE: drop qualifiers like "Extended Mix", try fewer artists, or try the remixer as the artist. Then conclude with what you have.
 - For a named remix/edit (e.g. "Hamdi Remix"), the match MUST be that version — the plain original is WRONG. If only the original exists, report no match for that platform.
 - Check artist lists: a high-confidence match shares the title and at least one artist.
 - Last.fm: prefer the entry with the most listeners (that's the canonical scrobble entry). Its artist/track spelling is authoritative — report it exactly as returned.
@@ -59,7 +61,7 @@ def refine_with_agent(unit: Unit, cascade: CascadeResult, clients) -> CascadeRes
         """Search Spotify for tracks. Returns candidates with id, title, artists, duration."""
         if not clients.spotify:
             return "Spotify is not available."
-        results = clients.spotify.search(query)
+        results = clients.spotify.search(query, limit=5)
         for c in results:
             seen_spotify[c["id"]] = c
         return json.dumps(
@@ -77,8 +79,8 @@ def refine_with_agent(unit: Unit, cascade: CascadeResult, clients) -> CascadeRes
         if info:
             seen_lastfm[(info["artist"], info["track"])] = info
             out["canonical"] = info
-        found = clients.lastfm.search(track, artist=artist or None)
-        for m in found[:5]:
+        found = clients.lastfm.search(track, artist=artist or None, limit=5)
+        for m in found[:3]:
             canon = clients.lastfm.get_info(m["artist"], m["track"])
             if canon:
                 seen_lastfm[(canon["artist"], canon["track"])] = canon
@@ -93,7 +95,7 @@ def refine_with_agent(unit: Unit, cascade: CascadeResult, clients) -> CascadeRes
         """Search YouTube. Returns candidates with id, title, uploader, duration."""
         if not clients.youtube:
             return "YouTube is not available."
-        results = clients.youtube.search(query)
+        results = clients.youtube.search(query, limit=5)
         for c in results:
             seen_youtube[c["id"]] = c
         return json.dumps(
@@ -104,7 +106,9 @@ def refine_with_agent(unit: Unit, cascade: CascadeResult, clients) -> CascadeRes
             ensure_ascii=False,
         ) or "[]"
 
-    llm = ChatOpenRouter(model=settings.llm_model, temperature=0)
+    llm = ChatOpenRouter(
+        model=settings.llm_model, temperature=0, max_tokens=settings.agent_max_tokens
+    )
     agent = create_agent(
         llm,
         tools=[search_spotify, search_lastfm, search_youtube],

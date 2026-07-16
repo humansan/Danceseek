@@ -54,7 +54,9 @@ class NormalizationError(RuntimeError):
 
 
 def _build_llm():
-    llm = ChatOpenRouter(model=settings.llm_model, temperature=0)
+    llm = ChatOpenRouter(
+        model=settings.llm_model, temperature=0, max_tokens=settings.llm_max_tokens
+    )
     # json_schema (not the default function_calling): lightweight models like
     # Gemma have no native tool calling, but OpenRouter can enforce a JSON
     # schema on the response for them.
