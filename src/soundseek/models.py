@@ -147,7 +147,8 @@ class Resolution(BaseModel):
     youtube: PlatformMatch | None = None
     lastfm: LastfmMatch | None = None
     confidence: float = 0.0
-    method: Literal["cascade", "agent", "registry", "skip"] = "cascade"
+    # "cascade"/"agent" are legacy values kept so old records stay loadable
+    method: Literal["batch_llm", "registry", "skip", "cascade", "agent"] = "batch_llm"
     resolved_at: str = Field(default_factory=_utcnow)
     notes: str | None = None
 

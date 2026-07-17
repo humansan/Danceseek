@@ -1,12 +1,13 @@
-"""Resolution orchestrator: route setlist rows through registry -> cascade -> agent.
+"""Resolution orchestrator: registry cache -> gather candidates -> batched LLM pick.
 
-Routing per row type (see plan):
-- is_id rows/components: status "unreleased", zero API calls
-- mashup rows: YouTube only (whole-mashup bootleg search); components get
-  Spotify + Last.fm each
-- everything else: Spotify + Last.fm + YouTube
-
-Precision over recall throughout: empty platform slots are valid outcomes.
+Flow per setlist:
+1. Walk rows/components; is_id -> "unreleased" instantly; registry hits stamp
+   cached resolutions; everything else becomes a pending Unit.
+2. Gather top candidates per platform for each pending unit (searches only).
+3. One LLM call per batch of units picks the best candidate (or none) per
+   platform; picks are validated against the gathered candidates and gated by
+   the confidence threshold. Empty results are valid (precision over recall).
+4. Stamp resolutions, mint/enrich the registry, log everything.
 """
 
 from __future__ import annotations
@@ -14,15 +15,16 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Callable
 
 from .. import store
 from ..config import settings
 from ..fetcher import url_digest
-from ..models import Resolution, Setlist, SetlistTrack
+from ..models import Resolution, Setlist
 from ..registry import Registry
-from .cascade import CascadeResult, Unit, run_cascade
 from .clients import ClientError, LastfmClient, SpotifyClient, YouTubeSearch
+from .gather import Unit, UnitCandidates, gather
+from .picker import pick_batch
 
 
 @dataclass
@@ -33,7 +35,7 @@ class ResolveSummary:
     unreleased: int = 0
     skipped: int = 0  # already had a resolution (no --force)
     registry_hits: int = 0
-    agent_runs: int = 0
+    llm_batches: int = 0
     warnings: list[str] = field(default_factory=list)
 
     def count(self, status: str) -> None:
@@ -56,28 +58,28 @@ class _Clients:
         except ClientError as e:
             summary.warnings.append(f"Last.fm disabled: {e}")
 
-
-def _status_for(result: CascadeResult, applicable: list[str]) -> str:
-    matched = [p for p in applicable if getattr(result, p) is not None]
-    if not matched:
-        return "no_match"
-    return "resolved" if len(matched) == len(applicable) else "partial"
-
-
-def _applicable(unit: Unit, clients: _Clients) -> list[str]:
-    if unit.kind == "mashup_row":
-        return ["youtube"] if clients.youtube else []
-    platforms = []
-    if clients.spotify:
-        platforms.append("spotify")
-    if clients.lastfm:
-        platforms.append("lastfm")
-    if clients.youtube and unit.kind == "track":
-        platforms.append("youtube")  # components skip YouTube (mashup row covers it)
-    return platforms
+    def applicable(self, unit: Unit) -> list[str]:
+        if unit.kind == "mashup_row":
+            return ["youtube"] if self.youtube else []
+        platforms = []
+        if self.spotify:
+            platforms.append("spotify")
+        if self.lastfm:
+            platforms.append("lastfm")
+        if self.youtube:
+            platforms.append("youtube")
+        return platforms
 
 
-def _log_line(log_path, unit: Unit, resolution: Resolution, cascade_log: dict[str, Any]) -> None:
+@dataclass
+class _Pending:
+    """A unit awaiting resolution plus the setter that stamps it back."""
+
+    unit: Unit
+    stamp: Callable[[Resolution], None]
+
+
+def _log_line(log_path, unit: Unit, resolution: Resolution, extra: dict) -> None:
     settings.resolution_logs_dir.mkdir(parents=True, exist_ok=True)
     line = {
         "raw_text": unit.raw_text,
@@ -92,146 +94,136 @@ def _log_line(log_path, unit: Unit, resolution: Resolution, cascade_log: dict[st
             if resolution.lastfm
             else None,
         },
-        "cascade": cascade_log,
+        **extra,
     }
     with log_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
-def _resolve_unit(
-    unit: Unit,
-    clients: _Clients,
+def _collect_pending(
+    setlist: Setlist,
     registry: Registry,
     summary: ResolveSummary,
-    use_agent: bool,
+    force: bool,
+    limit: int | None,
     log_path,
-    force: bool = False,
-) -> Resolution:
-    # 1. Registry cache (skip for mashup rows — they aren't registry entities;
-    #    --force bypasses the cache so a re-resolve actually re-searches)
-    if unit.kind != "mashup_row" and not force:
-        cached = registry.lookup(unit.artists, unit.title, unit.remix)
-        if cached is not None:
-            rebuilt = registry.resolution_from_record(cached)
-            if rebuilt is not None:
-                summary.registry_hits += 1
-                summary.count(rebuilt.status)
-                _log_line(log_path, unit, rebuilt, {"registry_hit": cached.id})
-                return rebuilt
+) -> list[_Pending]:
+    """Stamp instant outcomes (ids, registry hits); return units needing search."""
+    pending: list[_Pending] = []
+    processed_rows = 0
 
-    # 2. Deterministic cascade
-    applicable = _applicable(unit, clients)
-    result = run_cascade(unit, clients.spotify, clients.youtube, clients.lastfm)
-    method = "cascade"
+    def handle(unit: Unit, stamp: Callable[[Resolution], None]) -> None:
+        if unit.kind != "mashup_row" and not force:
+            cached = registry.lookup(unit.artists, unit.title, unit.remix)
+            if cached is not None:
+                rebuilt = registry.resolution_from_record(cached)
+                if rebuilt is not None:
+                    stamp(rebuilt)
+                    summary.registry_hits += 1
+                    summary.count(rebuilt.status)
+                    _log_line(log_path, unit, rebuilt, {"registry_hit": cached.id})
+                    return
+        pending.append(_Pending(unit, stamp))
 
-    # 3. Agent fallback for the ambiguous band only
-    if result.ambiguous and use_agent:
-        from .agent import refine_with_agent  # lazy: langchain import
+    for track in setlist.tracks:
+        if limit is not None and processed_rows >= limit:
+            break
+        if track.resolution is not None and not force:
+            summary.skipped += 1
+            continue
+        processed_rows += 1
 
-        try:
-            result = refine_with_agent(unit, result, clients)
-            method = "agent"
-            summary.agent_runs += 1
-        except Exception as e:  # agent failure must never lose the cascade outcome
-            summary.warnings.append(f"agent failed on {unit.raw_text!r}: {e}")
+        if track.is_id:
+            track.resolution = Resolution(status="unreleased", method="skip", confidence=0.0)
+            summary.count("unreleased")
+            continue
 
-    status = _status_for(result, applicable)
-    resolution = Resolution(
-        status=status,
-        spotify=result.spotify,
-        youtube=result.youtube,
-        lastfm=result.lastfm,
-        confidence=result.confidence,
-        method=method,
-    )
+        def stamp_track(res: Resolution, t=track) -> None:
+            t.resolution = res
 
-    # 4. Mint/enrich the registry for anything with at least one platform id
-    if unit.kind != "mashup_row" and (result.spotify or result.youtube or result.lastfm):
-        rec = registry.find_or_create(unit.artists, unit.title, unit.remix, resolution)
-        resolution.track_id = rec.id
-
-    summary.count(status)
-    _log_line(log_path, unit, resolution, result.log)
-    time.sleep(settings.resolve_api_delay_seconds)
-    return resolution
-
-
-def _resolve_track(
-    track: SetlistTrack, resolve: Callable[[Unit], Resolution], summary: ResolveSummary
-) -> None:
-    """Fill resolution slots on one setlist row (and its mashup components)."""
-    if track.is_id:
-        track.resolution = Resolution(status="unreleased", method="skip", confidence=0.0)
-        summary.count("unreleased")
-        return
-
-    if track.mashup_components:
-        # the row itself: whole-mashup YouTube search
-        track.resolution = resolve(
-            Unit(
-                artists=track.artists,
-                title=track.title,
-                remix=track.remix,
-                raw_text=track.raw_text,
-                kind="mashup_row",
+        if track.mashup_components:
+            handle(
+                Unit(track.artists, track.title, track.remix, track.raw_text, "mashup_row"),
+                stamp_track,
             )
-        )
-        for component in track.mashup_components:
-            if not component.title and not component.artists:
-                component.resolution = Resolution(status="unreleased", method="skip")
-                summary.count("unreleased")
-                continue
-            component.resolution = resolve(
-                Unit(
-                    artists=component.artists,
-                    title=component.title,
-                    remix=None,
-                    raw_text=f"{' & '.join(component.artists)} - {component.title or 'ID'}",
-                    kind="component",
+            for component in track.mashup_components:
+                if not component.title and not component.artists:
+                    component.resolution = Resolution(status="unreleased", method="skip")
+                    summary.count("unreleased")
+                    continue
+
+                def stamp_component(res: Resolution, c=component) -> None:
+                    c.resolution = res
+
+                raw = f"{' & '.join(component.artists)} - {component.title or '?'}" + (
+                    f" ({component.remix})" if component.remix else ""
                 )
-            )
-        return
+                handle(
+                    Unit(component.artists, component.title, component.remix, raw, "component"),
+                    stamp_component,
+                )
+        else:
+            handle(Unit(track.artists, track.title, track.remix, track.raw_text), stamp_track)
 
-    track.resolution = resolve(
-        Unit(
-            artists=track.artists,
-            title=track.title,
-            remix=track.remix,
-            raw_text=track.raw_text,
-            kind="track",
-        )
-    )
+    return pending
 
 
 def resolve_setlist(
     setlist: Setlist,
     force: bool = False,
-    use_agent: bool = True,
     limit: int | None = None,
 ) -> ResolveSummary:
-    """Resolve all (or the first `limit`) unresolved tracks; persists incrementally."""
+    """Resolve all (or the first `limit`) unresolved rows; persists incrementally."""
     summary = ResolveSummary()
     clients = _Clients(summary)
     registry = Registry()
     log_path = settings.resolution_logs_dir / f"{url_digest(setlist.source_url)}.jsonl"
 
-    def resolve(unit: Unit) -> Resolution:
-        return _resolve_unit(unit, clients, registry, summary, use_agent, log_path, force=force)
+    pending = _collect_pending(setlist, registry, summary, force, limit, log_path)
 
-    processed = 0
-    since_save = 0
-    for track in setlist.tracks:
-        if limit is not None and processed >= limit:
-            break
-        if track.resolution is not None and not force:
-            summary.skipped += 1
-            continue
-        _resolve_track(track, resolve, summary)
-        processed += 1
-        since_save += 1
-        if since_save >= settings.resolve_save_every:
-            store.save(setlist)  # crash-safe incremental persistence
-            since_save = 0
+    # Phase 2: searches
+    gathered: list[UnitCandidates] = []
+    for p in pending:
+        gathered.append(gather(p.unit, clients, limit=settings.resolve_candidates_per_platform))
+        time.sleep(settings.resolve_api_delay_seconds)
+
+    # Phase 3+4: batched LLM picks, stamp + registry + log + incremental saves
+    batch_size = settings.resolve_batch_size
+    for start in range(0, len(gathered), batch_size):
+        batch = gathered[start : start + batch_size]
+        batch_pending = pending[start : start + batch_size]
+        applicable = [clients.applicable(uc.unit) for uc in batch]
+        try:
+            resolutions = pick_batch(batch, applicable)
+            summary.llm_batches += 1
+        except Exception as e:
+            summary.warnings.append(f"LLM pick failed for batch at {start}: {e}")
+            continue  # units stay unresolved (slot stays null) for a retry run
+
+        for p, uc, resolution in zip(batch_pending, batch, resolutions):
+            if p.unit.kind != "mashup_row" and (
+                resolution.spotify or resolution.youtube or resolution.lastfm
+            ):
+                rec = registry.find_or_create(
+                    p.unit.artists, p.unit.title, p.unit.remix, resolution
+                )
+                resolution.track_id = rec.id
+            p.stamp(resolution)
+            summary.count(resolution.status)
+            _log_line(
+                log_path,
+                p.unit,
+                resolution,
+                {
+                    "candidates": {
+                        "spotify": [(c["id"], c["title"]) for c in uc.spotify],
+                        "youtube": [(c["id"], c["title"]) for c in uc.youtube],
+                        "lastfm": [f"{c['artist']} - {c['track']}" for c in uc.lastfm],
+                    },
+                    "queries": uc.log,
+                },
+            )
+        store.save(setlist)  # crash-safe per batch
 
     store.save(setlist)
     return summary

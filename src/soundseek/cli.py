@@ -101,7 +101,6 @@ def ingest(
 def resolve(
     ref: str = typer.Argument(help="Setlist id or source URL"),
     force: bool = typer.Option(False, "--force", help="Re-resolve tracks that already have a resolution"),
-    no_agent: bool = typer.Option(False, "--no-agent", help="Cascade only, skip the LLM agent fallback"),
     limit: int = typer.Option(None, "--limit", help="Debug: resolve only the first N unresolved tracks"),
 ) -> None:
     """Resolve a stored setlist's tracks to Spotify / YouTube / Last.fm."""
@@ -115,7 +114,7 @@ def resolve(
         console.print(f"[red]No stored setlist for {ref} — ingest it first.[/red]")
         raise typer.Exit(1)
 
-    summary = resolve_setlist(setlist, force=force, use_agent=not no_agent, limit=limit)
+    summary = resolve_setlist(setlist, force=force, limit=limit)
 
     for warning in summary.warnings:
         console.print(f"[yellow]warning: {warning}[/yellow]")
@@ -128,7 +127,7 @@ def resolve(
         f" | {summary.skipped} skipped (already done)"
     )
     console.print(
-        f"  registry cache hits: {summary.registry_hits} | agent runs: {summary.agent_runs}"
+        f"  registry cache hits: {summary.registry_hits} | LLM batches: {summary.llm_batches}"
     )
     console.print(f"  file: {store.setlist_path(setlist.id)}")
 
