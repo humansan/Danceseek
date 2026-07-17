@@ -21,7 +21,7 @@ from .. import store
 from ..config import settings
 from ..fetcher import url_digest
 from ..models import Resolution, Setlist
-from ..registry import Registry
+from ..registry import get_registry
 from .clients import ClientError, LastfmClient, SpotifyClient, YouTubeSearch
 from .gather import Unit, UnitCandidates, gather
 from .picker import pick_batch
@@ -40,6 +40,42 @@ class ResolveSummary:
 
     def count(self, status: str) -> None:
         setattr(self, status, getattr(self, status) + 1)
+
+
+def build_coverage(setlist: Setlist, summary: "ResolveSummary") -> dict:
+    """A JSON-safe coverage summary for the setlists.coverage column / UI.
+
+    Per-status counts come from the run summary; per-platform counts are
+    scanned from the persisted resolutions (top-level tracks + mashup
+    components), since one track can match on some platforms and not others.
+    """
+    spotify = youtube = lastfm = 0
+
+    def tally(res: Resolution | None) -> None:
+        nonlocal spotify, youtube, lastfm
+        if res is None:
+            return
+        spotify += res.spotify is not None
+        youtube += res.youtube is not None
+        lastfm += res.lastfm is not None
+
+    for track in setlist.tracks:
+        tally(track.resolution)
+        for component in track.mashup_components:
+            tally(component.resolution)
+
+    return {
+        "total": summary.resolved + summary.partial + summary.no_match + summary.unreleased,
+        "resolved": summary.resolved,
+        "partial": summary.partial,
+        "no_match": summary.no_match,
+        "unreleased": summary.unreleased,
+        "skipped": summary.skipped,
+        "registry_hits": summary.registry_hits,
+        "spotify": spotify,
+        "youtube": youtube,
+        "lastfm": lastfm,
+    }
 
 
 class _Clients:
@@ -176,7 +212,7 @@ def resolve_setlist(
     """Resolve all (or the first `limit`) unresolved rows; persists incrementally."""
     summary = ResolveSummary()
     clients = _Clients(summary)
-    registry = Registry()
+    registry = get_registry()
     log_path = settings.resolution_logs_dir / f"{url_digest(setlist.source_url)}.jsonl"
 
     pending = _collect_pending(setlist, registry, summary, force, limit, log_path)

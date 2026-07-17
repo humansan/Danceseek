@@ -45,12 +45,19 @@ def parsed_key(artists: list[str], title: str | None, remix: str | None) -> str 
 
 class Registry:
     def __init__(self) -> None:
-        self._tracks = _load()
+        self._tracks = self._load_all()
         self._by_spotify: dict[str, str] = {}
         self._by_lastfm: dict[tuple[str, str], str] = {}
         self._by_parsed: dict[str, str] = {}
         for tid, rec in self._tracks.items():
             self._index(tid, rec)
+
+    # --- backend seams (overridden by PgRegistry) --------------------------
+    def _load_all(self) -> dict[str, TrackRecord]:
+        return _load()
+
+    def _persist(self, rec: TrackRecord) -> None:
+        _save(self._tracks)  # JSON backend rewrites the whole file
 
     def _index(self, tid: str, rec: TrackRecord) -> None:
         if rec.spotify_id:
@@ -114,42 +121,59 @@ class Registry:
             rec.mbid = resolution.lastfm.mbid
         rec.updated_at = _utcnow()
         self._index(rec.id, rec)
-        _save(self._tracks)
+        self._persist(rec)
         return rec
 
     def resolution_from_record(self, rec: TrackRecord) -> Resolution | None:
-        """Rebuild a Resolution from a cached record (registry cache hit).
+        return resolution_from_record(rec)
 
-        Only platform *ids/names* survive the round trip; that's all later
-        steps (export, scrobbling) need."""
-        from .models import LastfmMatch, PlatformMatch
 
-        if rec.is_unreleased:
-            return Resolution(status="unreleased", track_id=rec.id, method="registry")
-        if not (rec.spotify_id or rec.youtube_id or rec.lastfm_artist):
-            return None  # record exists but has nothing useful cached
-        return Resolution(
-            status="resolved" if (rec.spotify_id and rec.lastfm_artist) else "partial",
-            track_id=rec.id,
-            spotify=PlatformMatch(
-                id=rec.spotify_id,
-                title=rec.title or "",
-                artists=rec.artists,
-                url=f"https://open.spotify.com/track/{rec.spotify_id}",
-            )
-            if rec.spotify_id
-            else None,
-            youtube=PlatformMatch(
-                id=rec.youtube_id,
-                title=rec.title or "",
-                artists=rec.artists,
-                url=f"https://www.youtube.com/watch?v={rec.youtube_id}",
-            )
-            if rec.youtube_id
-            else None,
-            lastfm=LastfmMatch(artist=rec.lastfm_artist, track=rec.lastfm_track or "")
-            if rec.lastfm_artist
-            else None,
-            confidence=1.0,  # was accepted once; the registry is trusted
-            method="registry",
+def resolution_from_record(rec: TrackRecord) -> Resolution | None:
+    """Rebuild a Resolution from a cached record (registry cache hit).
+
+    Only platform *ids/names* survive the round trip; that's all later
+    steps (export, scrobbling) need. Shared by both registry backends."""
+    from .models import LastfmMatch, PlatformMatch
+
+    if rec.is_unreleased:
+        return Resolution(status="unreleased", track_id=rec.id, method="registry")
+    if not (rec.spotify_id or rec.youtube_id or rec.lastfm_artist):
+        return None  # record exists but has nothing useful cached
+    return Resolution(
+        status="resolved" if (rec.spotify_id and rec.lastfm_artist) else "partial",
+        track_id=rec.id,
+        spotify=PlatformMatch(
+            id=rec.spotify_id,
+            title=rec.title or "",
+            artists=rec.artists,
+            url=f"https://open.spotify.com/track/{rec.spotify_id}",
         )
+        if rec.spotify_id
+        else None,
+        youtube=PlatformMatch(
+            id=rec.youtube_id,
+            title=rec.title or "",
+            artists=rec.artists,
+            url=f"https://www.youtube.com/watch?v={rec.youtube_id}",
+        )
+        if rec.youtube_id
+        else None,
+        lastfm=LastfmMatch(artist=rec.lastfm_artist, track=rec.lastfm_track or "")
+        if rec.lastfm_artist
+        else None,
+        confidence=1.0,  # was accepted once; the registry is trusted
+        method="registry",
+    )
+
+
+def get_registry():
+    """Return the registry backend matching the configured store.
+
+    Postgres store -> the shared `tracks` table (server-side, worker-safe);
+    JSON store -> the local data/tracks.json file. Same interface either way.
+    """
+    if settings.store_backend == "postgres":
+        from .registry_pg import PgRegistry
+
+        return PgRegistry()
+    return Registry()
