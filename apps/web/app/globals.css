@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Danceseek terminal-inspired design tokens (Tailwind v4 @theme).
+   Flat, dark, mono for data — the CLI's own color language. */
+@theme {
+  --color-bg: #0a0a0b;
+  --color-surface: #121214;
+  --color-surface-2: #1a1a1d;
+  --color-border: #2a2a2e;
+  --color-fg: #e6e6e6;
+  --color-dim: #8a8a90;
+
+  /* CLI status palette */
+  --color-ok: #4ec97a;      /* green  - resolved/success */
+  --color-warn: #e3c04b;    /* yellow - partial/skipped */
+  --color-link: #4fb8d6;    /* cyan   - links */
+  --color-flag: #c07bd6;    /* magenta- flags (mashup/w//ID) */
+  --color-accent: #3dd0c4;  /* phosphor accent - focus/live */
+
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --radius: 0px;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+}
+
+/* Sharp corners, no shadows — set the terminal tone globally. */
+* {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: #000;
+}
