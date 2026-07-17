@@ -226,4 +226,13 @@ def resolve_setlist(
         store.save(setlist)  # crash-safe per batch
 
     store.save(setlist)
+
+    # Auto-publish the processed setlist to the Neon cache table (best-effort).
+    from .. import db
+
+    try:
+        db.push(setlist)
+    except Exception as e:  # best-effort: a DB hiccup must never fail a resolve
+        summary.warnings.append(f"Neon push skipped: {e}")
+
     return summary

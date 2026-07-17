@@ -58,7 +58,12 @@ def load(setlist_id: str) -> Setlist:
 
 def load_by_url(source_url: str) -> Setlist | None:
     setlist_id = lookup(source_url)
-    return load(setlist_id) if setlist_id else None
+    if not setlist_id:
+        return None
+    try:
+        return load(setlist_id)
+    except FileNotFoundError:
+        return None  # stale index entry (file deleted manually) -> not ingested
 
 
 def list_all() -> list[Setlist]:

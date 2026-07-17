@@ -135,6 +135,61 @@ def resolve(
 
 
 @app.command()
+def push(
+    ref: str = typer.Argument(None, help="Setlist id or source URL (omit with --all)"),
+    all_: bool = typer.Option(False, "--all", help="Push every locally stored setlist"),
+) -> None:
+    """Upsert processed setlist(s) into the Neon cache table."""
+    from . import db  # lazy: psycopg import
+
+    if all_:
+        setlists = store.list_all()
+    elif ref:
+        try:
+            found = store.load_by_url(ref) if ref.startswith("http") else store.load(ref)
+        except FileNotFoundError:
+            found = None
+        if found is None:
+            console.print(f"[red]No stored setlist for {ref}[/red]")
+            raise typer.Exit(1)
+        setlists = [found]
+    else:
+        console.print("[red]Give a setlist id/URL or use --all.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        for s in setlists:
+            db.push(s)
+            console.print(f"[green]pushed[/green] {s.title or s.source_url} ({len(s.tracks)} tracks)")
+    except db.DbError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def remote() -> None:
+    """List setlists stored in the Neon cache table."""
+    from . import db
+
+    try:
+        rows = db.list_remote()
+    except db.DbError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+    if not rows:
+        console.print("Remote table is empty. Try: soundseek push --all")
+        return
+    table = Table()
+    table.add_column("pushed", style="dim")
+    table.add_column("title")
+    table.add_column("tracks", justify="right")
+    table.add_column("id", style="dim")
+    for r in rows:
+        table.add_row(r["pushed_at"][:19], r["title"] or "", str(r["tracks"]), r["id"])
+    console.print(table)
+
+
+@app.command()
 def show(ref: str = typer.Argument(help="Setlist id or source URL")) -> None:
     """Pretty-print a stored setlist."""
     try:
