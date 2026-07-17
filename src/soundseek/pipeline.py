@@ -36,6 +36,19 @@ def _assemble(page: RawSetlistPage, tracks) -> Setlist:
     )
 
 
+def build_setlist(url: str, force: bool = False) -> Setlist:
+    """Fetch + extract + LLM-normalize a URL into a Setlist. Does NOT persist.
+
+    Split out of ingest() so the background worker can normalize a set and then
+    save it under an id it already handed to the client (the stub row's id),
+    rather than minting a fresh one.
+    """
+    html = fetcher.fetch(url, force=force)
+    page = extract(html, url)
+    tracks = normalize(page)
+    return _assemble(page, tracks)
+
+
 def ingest(url: str, force: bool = False, skip_llm: bool = False) -> Setlist:
     """Ingest a 1001tracklists URL. Returns the stored (or existing) setlist.
 
@@ -47,10 +60,9 @@ def ingest(url: str, force: bool = False, skip_llm: bool = False) -> Setlist:
         if existing is not None:
             return existing
 
-    html = fetcher.fetch(url, force=force)
-    page = extract(html, url)
-
     if skip_llm:
+        html = fetcher.fetch(url, force=force)
+        page = extract(html, url)
         setlist = Setlist(
             source_url=page.source_url,
             title=page.title,
@@ -74,7 +86,6 @@ def ingest(url: str, force: bool = False, skip_llm: bool = False) -> Setlist:
         )
         return setlist  # debug output is not persisted
 
-    tracks = normalize(page)
-    setlist = _assemble(page, tracks)
+    setlist = build_setlist(url, force=force)
     store.save(setlist)
     return setlist
