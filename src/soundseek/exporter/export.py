@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..models import Setlist
 from .collect import ExportPlan, Target, build_plan
@@ -13,6 +13,7 @@ class ExportResult:
     plan: ExportPlan
     url: str | None = None  # None on a dry run
     added: int = 0
+    failed: list[tuple[str, str]] = field(default_factory=list)  # (id, reason)
     dry_run: bool = False
 
 
@@ -50,4 +51,6 @@ def export_setlist(
 
         result = YouTubeExporter().export(plan, playlist_name, description, public)
 
-    return ExportResult(plan=plan, url=result["url"], added=result["added"])
+    return ExportResult(
+        plan=plan, url=result["url"], added=result["added"], failed=result.get("failed", [])
+    )

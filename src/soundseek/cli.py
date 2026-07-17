@@ -265,10 +265,22 @@ def export(
     )
     if result.dry_run:
         console.print("  [dim]dry run — nothing created. Drop --dry-run to export.[/dim]")
-    elif result.url:
-        console.print(f"  [bold cyan]{result.url}[/bold cyan]")
-    elif plan.added == 0:
+        return
+    if plan.added == 0:
         console.print("  [yellow]Nothing resolved for this target — nothing to export.[/yellow]")
+        return
+    console.print(f"  [green]{result.added} added to the playlist[/green]")
+    if result.failed:
+        quota = sum(1 for _, r in result.failed if r == "quota_exceeded")
+        other = len(result.failed) - quota
+        note = []
+        if quota:
+            note.append(f"{quota} not added (daily quota reached — re-run to continue)")
+        if other:
+            note.append(f"{other} failed ({', '.join(sorted({r for _, r in result.failed if r != 'quota_exceeded'}))})")
+        console.print(f"  [yellow]{'; '.join(note)}[/yellow]")
+    if result.url:
+        console.print(f"  [bold cyan]{result.url}[/bold cyan]")
 
 
 @app.command()

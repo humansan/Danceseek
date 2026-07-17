@@ -47,4 +47,4 @@ class SpotifyExporter:
     def export(self, plan: ExportPlan, name: str, description: str, public: bool) -> dict:
         playlist_id, url = self.create_playlist(name, description, public)
         added = self.add_tracks(playlist_id, [i.id for i in plan.items])
-        return {"url": url, "added": added}
+        return {"url": url, "added": added, "failed": []}
