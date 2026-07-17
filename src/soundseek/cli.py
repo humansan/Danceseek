@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -9,8 +11,26 @@ from rich.table import Table
 from . import store
 from .models import Setlist
 
+# Track/artist names carry non-Latin-1 characters (Ørjan, Beyoncé, →); the
+# Windows console defaults to cp1252 and would crash on them.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 app = typer.Typer(help="SoundSeek v0 - 1001tracklists setlist ingestor", no_args_is_help=True)
 console = Console()
+
+
+def _load_or_exit(ref: str) -> Setlist:
+    """Load a stored setlist by id or URL, or exit with a clear message."""
+    try:
+        setlist = store.load_by_url(ref) if ref.startswith("http") else store.load(ref)
+    except FileNotFoundError:
+        setlist = None
+    if setlist is None:
+        console.print(f"[red]No stored setlist for {ref} — ingest it first.[/red]")
+        raise typer.Exit(1)
+    return setlist
 
 
 def _summarize(setlist: Setlist) -> None:
@@ -74,6 +94,23 @@ def _res_cell(res) -> str:
         letter for letter, match in (("S", res.spotify), ("Y", res.youtube), ("L", res.lastfm)) if match
     )
     return f"{platforms} {res.confidence:.2f}".strip()
+
+
+def _coverage_table(plan) -> Table:
+    from collections import Counter
+
+    table = Table(title=f"Export plan → {plan.target}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("track / reason")
+    table.add_column("status", style="magenta")
+    for i, item in enumerate(plan.items, 1):
+        table.add_row(str(i), item.label, "[green]add[/green]")
+    for label, reason in plan.skipped:
+        table.add_row("", f"[dim]{label}[/dim]", f"[yellow]skip: {reason}[/yellow]")
+    reasons = Counter(reason for _, reason in plan.skipped)
+    if reasons:
+        table.caption = "skipped: " + ", ".join(f"{n} {r}" for r, n in reasons.most_common())
+    return table
 
 
 @app.command()
@@ -190,16 +227,54 @@ def remote() -> None:
 
 
 @app.command()
+def export(
+    ref: str = typer.Argument(help="Setlist id or source URL"),
+    target: str = typer.Option(..., "--target", help="spotify or youtube"),
+    name: str = typer.Option(None, "--name", help="Playlist name (default: '<title> (via SoundSeek)')"),
+    public: bool = typer.Option(False, "--public/--private", help="Playlist visibility"),
+    skip_played_with: bool = typer.Option(False, "--skip-played-with", help="Exclude layered (w/) tracks"),
+    no_expand_mashups: bool = typer.Option(False, "--no-expand-mashups", help="Don't split mashups into components"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be exported without creating anything"),
+) -> None:
+    """Export a resolved setlist to a Spotify or YouTube playlist."""
+    if target not in ("spotify", "youtube"):
+        console.print("[red]--target must be 'spotify' or 'youtube'.[/red]")
+        raise typer.Exit(1)
+
+    from .exporter.export import export_setlist  # lazy: httpx/oauth imports
+    from .exporter.oauth import OAuthError
+
+    setlist = _load_or_exit(ref)
+    try:
+        result = export_setlist(
+            setlist, target, name=name, public=public,
+            expand_mashups=not no_expand_mashups, skip_played_with=skip_played_with,
+            dry_run=dry_run,
+        )
+    except OAuthError as e:
+        console.print(f"[red]Auth not configured: {e}[/red]")
+        raise typer.Exit(1)
+
+    plan = result.plan
+    console.print(_coverage_table(plan))
+    verb = "would add" if result.dry_run else "added"
+    console.print(
+        f"\n[bold]{setlist.title}[/bold] → {target}\n"
+        f"  [green]{plan.added} {verb}[/green] | {len(plan.skipped)} skipped"
+        f" (of {plan.total_considered} considered)"
+    )
+    if result.dry_run:
+        console.print("  [dim]dry run — nothing created. Drop --dry-run to export.[/dim]")
+    elif result.url:
+        console.print(f"  [bold cyan]{result.url}[/bold cyan]")
+    elif plan.added == 0:
+        console.print("  [yellow]Nothing resolved for this target — nothing to export.[/yellow]")
+
+
+@app.command()
 def show(ref: str = typer.Argument(help="Setlist id or source URL")) -> None:
     """Pretty-print a stored setlist."""
-    try:
-        setlist = store.load_by_url(ref) if ref.startswith("http") else store.load(ref)
-    except FileNotFoundError:
-        setlist = None
-    if setlist is None:
-        console.print(f"[red]No stored setlist for {ref}[/red]")
-        raise typer.Exit(1)
-    console.print(_track_table(setlist))
+    console.print(_track_table(_load_or_exit(ref)))
 
 
 @app.command(name="list")
