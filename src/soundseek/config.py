@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     resolve_candidates_per_platform: int = 5
     resolve_api_delay_seconds: float = 0.3  # politeness between API calls
 
+    # Export (Step 4) — OAuth loopback
+    export_redirect_port: int = 8888
+    spotify_redirect_uri: str = "http://127.0.0.1:8888/callback"
+    export_api_delay_seconds: float = 0.2  # between YouTube playlistItems inserts
+
     @property
     def raw_html_dir(self) -> Path:
         return self.data_dir / "raw_html"
@@ -67,6 +72,10 @@ class Settings(BaseSettings):
     @property
     def browser_profile_dir(self) -> Path:
         return self.data_dir / "browser_profile"
+
+    @property
+    def auth_dir(self) -> Path:
+        return self.data_dir / "auth"
 
 
 settings = Settings()
