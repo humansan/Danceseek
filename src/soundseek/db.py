@@ -120,6 +120,19 @@ def push(setlist: Setlist) -> None:
         conn.close()
 
 
+def clear() -> int:
+    """Delete every row from the cache table. Returns the number removed."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM setlists")
+            removed = cur.rowcount
+        conn.commit()
+        return removed
+    finally:
+        conn.close()
+
+
 def fetch(source_url: str) -> Setlist | None:
     """Load a processed setlist from the cache table, or None."""
     conn = _connect()

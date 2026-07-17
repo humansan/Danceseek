@@ -306,5 +306,75 @@ def list_cmd() -> None:
     console.print(table)
 
 
+@app.command()
+def reset(
+    database: bool = typer.Option(False, "--database", help="Also empty the Neon cache table"),
+    all_: bool = typer.Option(
+        False, "--all", help="Also remove login state: Cloudflare browser profile + OAuth tokens"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+) -> None:
+    """Delete local processed data to start fresh.
+
+    Removes setlists, cached HTML, the track registry, the URL index, and debug
+    logs. Login state (Cloudflare browser profile, OAuth tokens) is kept unless
+    --all. Use --database to also empty the Neon cache table.
+    """
+    import shutil
+
+    from .config import settings
+
+    targets = [
+        ("setlists", settings.setlists_dir),
+        ("cached HTML", settings.raw_html_dir),
+        ("LLM input dumps", settings.llm_inputs_dir),
+        ("resolution logs", settings.resolution_logs_dir),
+        ("track registry", settings.tracks_path),
+        ("URL index", settings.index_path),
+    ]
+    if all_:
+        targets += [
+            ("browser profile (Cloudflare clearance)", settings.browser_profile_dir),
+            ("OAuth tokens", settings.auth_dir),
+        ]
+
+    present = [(label, p) for label, p in targets if p.exists()]
+
+    console.print("[bold]This will delete:[/bold]")
+    for label, p in present:
+        console.print(f"  - {label}  [dim]{p}[/dim]")
+    if database:
+        console.print("  - [bold]all rows in the Neon cache table[/bold]")
+    if not present and not database:
+        console.print("  [dim](nothing found — already clean)[/dim]")
+        return
+    if not all_:
+        console.print(
+            "[dim]Keeping login state (browser profile, OAuth tokens); pass --all to remove those too.[/dim]"
+        )
+
+    if not yes and not typer.confirm("Proceed?"):
+        console.print("[yellow]Aborted — nothing deleted.[/yellow]")
+        raise typer.Exit(1)
+
+    for label, p in present:
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+        console.print(f"[green]removed[/green] {label}")
+
+    if database:
+        from . import db
+
+        try:
+            removed = db.clear()
+            console.print(f"[green]cleared[/green] Neon cache table ({removed} rows)")
+        except db.DbError as e:
+            console.print(f"[yellow]database not cleared: {e}[/yellow]")
+
+    console.print("\n[bold green]Reset complete.[/bold green]")
+
+
 if __name__ == "__main__":
     app()
