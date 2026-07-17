@@ -11,3 +11,5 @@ __pycache__/
 
 # Local data (scraped HTML, setlists, browser profile)
 data/
+node_modules/
+.next/
