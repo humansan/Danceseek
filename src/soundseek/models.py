@@ -48,6 +48,9 @@ class RawSetlistPage(BaseModel):
     event: str | None = None
     date_recorded: str | None = None  # ISO date string when parseable
     genres: list[str] = Field(default_factory=list)
+    # The set recording the page's cue timestamps refer to (best available link)
+    media_url: str | None = None
+    media_kind: str | None = None  # "youtube" | "soundcloud" | "hearthis" | "other"
     rows: list[RawTrackRow] = Field(default_factory=list)
     fallback_text: str | None = None  # page text when row selectors failed
 
@@ -200,6 +203,8 @@ class Setlist(BaseModel):
     event: str | None = None
     date_recorded: str | None = None
     genres: list[str] = Field(default_factory=list)
+    media_url: str | None = None  # linked set recording (cue timestamps refer to it)
+    media_kind: str | None = None
     scraped_at: str = Field(default_factory=_utcnow)
     parser: ParserInfo
     tracks: list[SetlistTrack] = Field(default_factory=list)

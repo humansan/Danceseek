@@ -19,6 +19,8 @@ def _summarize(setlist: Setlist) -> None:
         console.print(f"  {setlist.event or ''}  {setlist.date_recorded or ''}".rstrip())
     if setlist.genres:
         console.print(f"  genres: {', '.join(setlist.genres)}")
+    if setlist.media_url:
+        console.print(f"  media: {setlist.media_url} ({setlist.media_kind})")
 
     n_id = sum(t.is_id for t in setlist.tracks)
     n_w = sum(t.played_with is not None for t in setlist.tracks)

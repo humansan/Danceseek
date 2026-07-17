@@ -62,6 +62,10 @@ class TestToronto:
     def test_id_row_kept_verbatim(self, page):
         assert page.rows[-1].raw_text == "Fred again.. - ID"
 
+    def test_linked_media_video(self, page):
+        assert page.media_url == "https://www.youtube.com/watch?v=s4ddlQMTxDQ"
+        assert page.media_kind == "youtube"
+
 
 class TestTwitch:
     @pytest.fixture
@@ -81,6 +85,10 @@ class TestTwitch:
     def test_cue_zero_only_valid_on_first_track(self, page):
         # site stores unknown cues as 0; those must come back as None
         assert all(r.cue_time != "0:00" for r in page.rows if r.position != 1)
+
+    def test_linked_media_video(self, page):
+        assert page.media_url == "https://www.youtube.com/watch?v=uPSGBvGPw7M"
+        assert page.media_kind == "youtube"
 
 
 @pytest.fixture(scope="module")
@@ -113,6 +121,11 @@ class TestEdcMashupComponents:
         bounty = next(r for r in page.rows if r.raw_text.startswith("Bountyhunter"))
         assert bounty.source_track_number == 4
 
+    def test_linked_media_video(self, page):
+        # VideoObject embed normalized to a watch URL
+        assert page.media_url == "https://www.youtube.com/watch?v=Vh8y7ro0mrQ"
+        assert page.media_kind == "youtube"
+
 
 def test_non_tracklist_page_raises():
     with pytest.raises(ExtractionError):
@@ -124,3 +137,5 @@ def test_prose_page_falls_back_to_text():
     page = extract(f"<html><body>{body}</body></html>", "https://example/tracklist/x/y.html")
     assert page.rows == []
     assert page.fallback_text and "Artist - Title" in page.fallback_text
+    # no player markup -> media stays null
+    assert page.media_url is None and page.media_kind is None

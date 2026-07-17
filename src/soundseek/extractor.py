@@ -28,6 +28,8 @@ from .models import RawSetlistPage, RawTrackRow
 # Title convention: "DJ1 & DJ2 @ Event 2025-11-14" (date suffix optional)
 _TITLE_RE = re.compile(r"^(?P<djs>.+?)\s+@\s+(?P<event>.+?)(?:\s+(?P<date>\d{4}-\d{2}-\d{2}))?$")
 
+_YT_EMBED_RE = re.compile(r"youtube\.com/embed/([\w-]+)")
+
 
 class ExtractionError(RuntimeError):
     """Raised when the page yields no tracklist — layout drift or a bad page."""
@@ -113,10 +115,39 @@ def _parse_page_title(soup: BeautifulSoup) -> tuple[str | None, list[str], str |
     return title, djs, m.group("event"), m.group("date")
 
 
+def _media_kind(url: str) -> str:
+    for kind in ("youtube", "soundcloud", "hearthis"):
+        if kind in url:
+            return kind
+    return "other"
+
+
+def _extract_media(soup: BeautifulSoup) -> tuple[str | None, str | None]:
+    """Best link to the set recording the cue timestamps refer to.
+
+    Preferred: the schema.org VideoObject the page features (YouTube embed) ->
+    normalized to a watch URL. Fallback: the first mediaLink player iframe
+    (hearthis.at / SoundCloud / ...)."""
+    video = soup.select_one("div[itemprop='video'] meta[itemprop='embedUrl']")
+    if video and video.get("content"):
+        url = str(video["content"])
+        m = _YT_EMBED_RE.search(url)
+        if m:
+            return f"https://www.youtube.com/watch?v={m.group(1)}", "youtube"
+        return url, _media_kind(url)
+
+    iframe = soup.select_one("div.mediaLink iframe[src]")
+    if iframe:
+        url = str(iframe["src"])
+        return url, _media_kind(url)
+    return None, None
+
+
 def extract(html: str, source_url: str) -> RawSetlistPage:
     soup = BeautifulSoup(html, "lxml")
 
     title, dj_names, event, date_recorded = _parse_page_title(soup)
+    media_url, media_kind = _extract_media(soup)
 
     rows: list[RawTrackRow] = []
     items = soup.select("div.tlpItem")
@@ -152,6 +183,8 @@ def extract(html: str, source_url: str) -> RawSetlistPage:
         event=event,
         date_recorded=date_recorded,
         genres=genres,
+        media_url=media_url,
+        media_kind=media_kind,
         rows=rows,
     )
 

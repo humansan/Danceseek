@@ -18,6 +18,8 @@ def _assemble(page: RawSetlistPage, tracks) -> Setlist:
         event=page.event,
         date_recorded=page.date_recorded,
         genres=page.genres,
+        media_url=page.media_url,
+        media_kind=page.media_kind,
         parser=ParserInfo(model=settings.llm_model),
         tracks=[
             SetlistTrack(
@@ -56,6 +58,8 @@ def ingest(url: str, force: bool = False, skip_llm: bool = False) -> Setlist:
             event=page.event,
             date_recorded=page.date_recorded,
             genres=page.genres,
+            media_url=page.media_url,
+            media_kind=page.media_kind,
             parser=ParserInfo(model="none (--no-llm)"),
             tracks=[
                 SetlistTrack(
