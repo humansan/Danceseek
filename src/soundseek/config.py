@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     # Storage layout
     data_dir: Path = PROJECT_ROOT / "data"
+    store_backend: str = "json"  # "json" (local/CLI) or "postgres" (Neon)
 
     # Scraping politeness
     fetch_delay_seconds: float = 2.0
