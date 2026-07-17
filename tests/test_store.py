@@ -1,6 +1,9 @@
 import pytest
 
-from soundseek import store
+# Test the JSON backend directly: `store` dispatches to json or postgres based
+# on SOUNDSEEK_STORE_BACKEND, and these cases assert JSON-file semantics (and
+# must never touch the real Neon DB).
+from soundseek import store_json as store
 from soundseek.config import settings
 from soundseek.models import ParserInfo, Setlist, SetlistTrack
 

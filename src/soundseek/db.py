@@ -324,3 +324,173 @@ def list_remote() -> list[dict[str, Any]]:
         ]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Job queue (jobs table) — a producer (API) enqueues; the worker claims with
+# FOR UPDATE SKIP LOCKED so multiple workers never grab the same row.
+# ---------------------------------------------------------------------------
+
+
+def enqueue(
+    type: str, setlist_id: str, payload: dict | None = None, priority: int = 0
+) -> int:
+    """Insert a queued job; return its id."""
+    from psycopg.types.json import Jsonb
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO jobs (type, setlist_id, payload, priority, status) "
+                "VALUES (%s, %s, %s, %s, 'queued') RETURNING id",
+                (type, setlist_id, Jsonb(payload) if payload is not None else None, priority),
+            )
+            job_id = cur.fetchone()[0]
+        conn.commit()
+        return job_id
+    finally:
+        conn.close()
+
+
+def claim_job() -> dict[str, Any] | None:
+    """Atomically claim the next queued job (highest priority, oldest first).
+
+    Uses FOR UPDATE SKIP LOCKED: the row is locked for the life of the
+    transaction, marked 'running', then committed — so a second worker polling
+    concurrently skips it and takes the next one instead.
+    """
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, type, setlist_id, payload, attempts FROM jobs "
+                "WHERE status = 'queued' "
+                "ORDER BY priority DESC, created_at "
+                "FOR UPDATE SKIP LOCKED LIMIT 1"
+            )
+            row = cur.fetchone()
+            if row is None:
+                conn.rollback()
+                return None
+            cur.execute(
+                "UPDATE jobs SET status = 'running', started_at = now(), "
+                "attempts = attempts + 1 WHERE id = %s",
+                (row[0],),
+            )
+        conn.commit()
+        payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
+        return {
+            "id": row[0],
+            "type": row[1],
+            "setlist_id": str(row[2]) if row[2] else None,
+            "payload": payload,
+            "attempts": row[4] + 1,
+        }
+    finally:
+        conn.close()
+
+
+def complete_job(job_id: int) -> None:
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE jobs SET status = 'done', finished_at = now() WHERE id = %s",
+                (job_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def fail_job(job_id: int, error: str) -> None:
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE jobs SET status = 'failed', error = %s, finished_at = now() "
+                "WHERE id = %s",
+                (error, job_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Track registry (tracks table) — the server-side backing store for the
+# cross-set cache. See registry_pg.PgRegistry, which owns the dedupe logic.
+# ---------------------------------------------------------------------------
+
+_TRACK_COLUMNS = (
+    "id, artists, title, remix, is_unreleased, spotify_id, youtube_id, "
+    "lastfm_artist, lastfm_track, mbid, created_at, updated_at"
+)
+
+
+def all_tracks() -> list["TrackRecord"]:
+    """Every canonical track record (parsed_key is recomputed in memory)."""
+    from .models import TrackRecord
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {_TRACK_COLUMNS} FROM tracks")
+            rows = cur.fetchall()
+        return [
+            TrackRecord(
+                id=str(r[0]),
+                artists=list(r[1] or []),
+                title=r[2],
+                remix=r[3],
+                is_unreleased=r[4],
+                spotify_id=r[5],
+                youtube_id=r[6],
+                lastfm_artist=r[7],
+                lastfm_track=r[8],
+                mbid=r[9],
+                created_at=str(r[10]),
+                updated_at=str(r[11]),
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def upsert_track(rec: "TrackRecord") -> None:
+    """Write one canonical record, keyed by its (in-memory-deduped) id.
+
+    parsed_key is stored so the plain btree index can serve pre-search lookups;
+    it is computed the same way the registry indexes it in memory.
+    """
+    from .registry import parsed_key as _parsed_key
+
+    key = _parsed_key(rec.artists, rec.title, rec.remix)
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO tracks (id, artists, title, remix, is_unreleased,
+                                    spotify_id, youtube_id, lastfm_artist,
+                                    lastfm_track, mbid, parsed_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    artists = EXCLUDED.artists, title = EXCLUDED.title,
+                    remix = EXCLUDED.remix, is_unreleased = EXCLUDED.is_unreleased,
+                    spotify_id = EXCLUDED.spotify_id, youtube_id = EXCLUDED.youtube_id,
+                    lastfm_artist = EXCLUDED.lastfm_artist,
+                    lastfm_track = EXCLUDED.lastfm_track, mbid = EXCLUDED.mbid,
+                    parsed_key = EXCLUDED.parsed_key, updated_at = now()
+                """,
+                (
+                    rec.id, rec.artists, rec.title, rec.remix, rec.is_unreleased,
+                    rec.spotify_id, rec.youtube_id, rec.lastfm_artist,
+                    rec.lastfm_track, rec.mbid, key,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
