@@ -59,7 +59,11 @@ function Transport() {
 function Scrubber() {
   const { playhead, duration, seek, loaded } = usePlayer();
   const windows = loaded?.windows ?? [];
-  const span = duration || windows.at(-1)?.end_s || 0;
+  // The axis must cover both clocks. Cue times come from 1001TL and the
+  // duration from YouTube, and they disagree whenever the tracklist was timed
+  // against a longer upload — scaling to the shorter one pushed the late ticks
+  // past 100% and out of the bar.
+  const span = Math.max(duration, windows.at(-1)?.end_s ?? 0, 0);
   const pct = span ? Math.min(100, (playhead / span) * 100) : 0;
 
   return (
@@ -80,7 +84,7 @@ function Scrubber() {
           const box = e.currentTarget.getBoundingClientRect();
           seek(((e.clientX - box.left) / box.width) * span);
         }}
-        className="group relative h-6 flex-1 cursor-pointer"
+        className="group relative h-6 min-w-0 flex-1 cursor-pointer overflow-hidden"
       >
         {/* the track itself */}
         <div className="absolute top-1/2 h-1.5 w-full -translate-y-1/2 bg-surface-2">
@@ -95,6 +99,10 @@ function Scrubber() {
               .filter((w) => w.component_index == null)
               .map((w) => {
                 const passed = playhead >= w.start_s;
+                // Clamped so a stray cue time can never place a tick outside
+                // the track; the last pixel is pulled back in so an end-of-set
+                // tick isn't clipped away by overflow-hidden.
+                const at = Math.min(100, Math.max(0, (w.start_s / span) * 100));
                 return (
                   <span
                     key={w.position}
@@ -102,7 +110,7 @@ function Scrubber() {
                     className={`absolute top-1/2 h-4 w-px -translate-y-1/2 ${
                       passed ? "bg-accent" : "bg-white/70"
                     }`}
-                    style={{ left: `${(w.start_s / span) * 100}%` }}
+                    style={{ left: `calc(${at}% - ${at === 100 ? 1 : 0}px)` }}
                   />
                 );
               })
