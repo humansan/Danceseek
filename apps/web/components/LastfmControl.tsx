@@ -69,25 +69,27 @@ export function LastfmControl() {
     }
   };
 
+  // Every control in the bar is h-8 so the row stays optically aligned.
+  const chip = "flex h-8 items-center px-3 font-mono text-xs";
+
   // Until /me answers, render the signed-out shape so the bar doesn't jump.
   if (!me?.connected) {
     if (busy) {
-      return (
-        <span className="border border-border px-3 py-1.5 font-mono text-xs text-accent">
-          finishing…
-        </span>
-      );
+      return <span className={`${chip} border border-lastfm/60 text-lastfm`}>finishing…</span>;
     }
     return (
       <div className="flex items-center gap-2">
         {failed ? (
-          <span className="font-mono text-[11px] text-warn" title="approve the app on Last.fm, then try again">
+          <span
+            className="font-mono text-[11px] text-warn"
+            title="approve the app on Last.fm, then try again"
+          >
             not approved
           </span>
         ) : null}
         <a
           href="/api/auth/lastfm/start"
-          className="border border-border px-3 py-1.5 font-mono text-xs text-dim hover:border-accent hover:text-accent"
+          className={`${chip} border border-lastfm bg-lastfm/10 text-lastfm hover:bg-lastfm hover:text-bg`}
         >
           connect last.fm
         </a>
@@ -96,15 +98,17 @@ export function LastfmControl() {
   }
 
   return (
-    <div className="flex items-center gap-2 font-mono text-xs">
-      <span className="text-ok" title="connected to Last.fm">
-        ●
+    <div className="flex items-center gap-2">
+      <span className={`${chip} border border-lastfm/50 gap-2 text-fg`}>
+        <span className="text-lastfm" title="connected to Last.fm">
+          ●
+        </span>
+        {me.lastfm_username}
       </span>
-      <span className="text-fg">{me.lastfm_username}</span>
       <button
         onClick={disconnect}
         disabled={busy}
-        className="border border-border px-2 py-1 text-dim hover:text-fg disabled:opacity-50"
+        className={`${chip} cursor-pointer border border-border text-dim hover:border-lastfm hover:text-lastfm disabled:opacity-50`}
       >
         {busy ? "…" : "disconnect"}
       </button>

@@ -199,7 +199,7 @@ function RowActions({
   ];
 
   return (
-    <span className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
+    <span className="flex shrink-0 items-center gap-1.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
       {name ? (
         <button
           onClick={async () => {
@@ -209,18 +209,9 @@ function RowActions({
             }
           }}
           title={`copy "${name}"`}
-          className="px-1 text-[10px] text-dim hover:text-accent"
+          className="cursor-pointer px-1.5 py-0.5 text-sm text-dim hover:text-accent"
         >
           {copied ? "✓" : "⧉"}
-        </button>
-      ) : null}
-      {window ? (
-        <button
-          onClick={() => onSeek(window.start_s)}
-          title={`seek to ${formatTime(window.start_s)}`}
-          className="px-1 text-[10px] text-dim hover:text-accent"
-        >
-          ▸
         </button>
       ) : null}
       {links.map(([label, href]) =>
@@ -231,12 +222,35 @@ function RowActions({
             target="_blank"
             rel="noreferrer noopener"
             title={`open on ${label === "S" ? "Spotify" : label === "Y" ? "YouTube" : "Last.fm"}`}
-            className="px-0.5 text-[10px] text-dim hover:text-link"
+            className="cursor-pointer px-1 py-0.5 text-sm text-dim hover:text-link"
           >
             ↗
           </a>
         ) : null,
       )}
+    </span>
+  );
+}
+
+/** Title line: name, then any version in blue behind a ◆ separator. */
+function TrackName({
+  title,
+  remix,
+  muted,
+}: {
+  title: string;
+  remix?: string | null;
+  muted?: boolean;
+}) {
+  return (
+    <span className="min-w-0 truncate">
+      <span className={muted ? "text-dim" : "text-fg"}>{title}</span>
+      {remix ? (
+        <>
+          <span className="sep" />
+          <span className="text-link">{remix}</span>
+        </>
+      ) : null}
     </span>
   );
 }
@@ -267,72 +281,95 @@ function Row({
   const components = t.mashup_components ?? [];
   const noMatch = r?.status === "no_match";
 
+  const isScrobbled = scrobbled.has(keyOf(t.position, null));
+
   return (
     <>
+      {/* Each track is a card: a clickable time/position block on the left,
+          then title over artists. `w/` rows aren't indented — the marker in the
+          position column already says what they are. */}
       <div
         ref={rowRef}
-        className={`group/row flex items-baseline gap-3 border-b border-border/60 px-2 py-1.5 font-mono text-sm ${
+        className={`group/row flex items-stretch gap-4 border-b border-border/60 pr-3 ${
           inWindow ? "bg-surface-2" : "hover:bg-surface-2"
-        } ${selected ? "outline outline-1 -outline-offset-1 outline-accent/60" : ""} ${
-          layered ? "pl-6" : ""
-        } ${noMatch ? "text-dim" : ""}`}
+        } ${selected ? "outline outline-1 -outline-offset-1 outline-accent/60" : ""}`}
       >
-        <span
-          className={`w-4 shrink-0 ${scrobbled.has(keyOf(t.position, null)) ? "text-ok" : "text-accent"}`}
-          title={
-            scrobbled.has(keyOf(t.position, null))
-              ? "scrobbled"
-              : window?.eligible === false
-                ? `not scrobbled: ${window.reason}`
-                : undefined
-          }
-        >
-          {scrobbled.has(keyOf(t.position, null)) ? "✓" : isCurrent ? "▮▮▯" : ""}
-        </span>
         <button
           onClick={() => window && onSeek(window.start_s)}
           disabled={!window}
           title={window ? `seek to ${formatTime(window.start_s)}` : undefined}
-          className="w-14 shrink-0 text-right text-xs text-dim enabled:hover:text-accent"
+          className="flex w-32 shrink-0 items-center gap-2 py-2.5 pl-3 font-mono text-xs text-dim enabled:cursor-pointer enabled:hover:text-accent"
         >
-          {t.cue_time ?? ""}
+          <span
+            className={`w-5 shrink-0 text-left ${isScrobbled ? "text-ok" : "text-accent"}`}
+            title={
+              isScrobbled
+                ? "scrobbled"
+                : window?.eligible === false
+                  ? `not scrobbled: ${window.reason}`
+                  : undefined
+            }
+          >
+            {isScrobbled ? "✓" : isCurrent ? "▮▮▯" : ""}
+          </span>
+          <span className="w-14 shrink-0 text-right tabular-nums">{t.cue_time ?? ""}</span>
+          <span className="w-6 shrink-0 text-right">
+            {t.source_track_number ?? (layered ? "w/" : "")}
+          </span>
         </button>
-        <span className="w-6 shrink-0 text-right text-xs text-dim">
-          {t.source_track_number ?? (layered ? "w/" : "")}
-        </span>
+
         {/* min-w-0 is what lets truncate actually bite: a flex child defaults
-            to min-width:auto and would otherwise widen the row instead. Mashup
-            titles ("A vs. B vs. C (… Mashup)") are long enough to matter. */}
-        <span className="min-w-0 flex-1 truncate">
-          {t.is_id ? (
-            <span className="border border-dashed border-flag/50 px-1 text-flag">ID · unreleased</span>
-          ) : (
-            <>
-              <span className={noMatch ? "text-dim" : "text-fg"}>
-                {t.artists?.join(", ") || t.raw_text}
+            to min-width:auto and would otherwise widen the row instead. */}
+        <div className="flex min-w-0 flex-1 flex-col justify-center py-2">
+          <div className="flex min-w-0 items-baseline font-sans text-sm">
+            {t.is_id ? (
+              <span className="border border-dashed border-flag/50 px-1.5 py-0.5 font-mono text-xs text-flag">
+                ID · unreleased
               </span>
-              {t.title ? <span className="text-dim"> — {t.title}</span> : null}
-              {t.remix ? <span className="text-link"> ({t.remix})</span> : null}
-              {components.length ? <span className="ml-1 text-flag">⋈</span> : null}
-            </>
-          )}
-        </span>
-        <RowActions t={t} window={window} onSeek={onSeek} />
-        <Pills r={r} />
+            ) : (
+              <>
+                <TrackName title={t.title || t.raw_text} remix={t.remix} muted={noMatch} />
+                {components.length ? (
+                  <span className="ml-2 shrink-0 text-flag" title="mashup">
+                    ⋈
+                  </span>
+                ) : null}
+              </>
+            )}
+          </div>
+          {t.artists?.length ? (
+            <div className="truncate font-mono text-xs text-dim">{t.artists.join(", ")}</div>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <RowActions t={t} window={window} onSeek={onSeek} />
+          <Pills r={r} />
+        </div>
       </div>
 
-      {/* mashup components resolve individually — each is its own scrobble */}
+      {/* Mashup components are cards too — no cue or position of their own,
+          nudged in behind a ↳ and dimmed, because each one still scrobbles. */}
       {components.map((c, i) => (
         <div
           key={i}
-          className="flex items-baseline gap-3 border-b border-border/40 py-1 pl-16 pr-2 font-mono text-xs text-dim"
+          className="flex items-stretch gap-4 border-b border-border/40 bg-bg/40 pr-3 hover:bg-surface-2"
         >
-          <span className="min-w-0 flex-1 truncate">
-            ↳ {c.artists?.join(", ")}
-            {c.title ? <span> — {c.title}</span> : null}
-            {c.remix ? <span className="text-link"> ({c.remix})</span> : null}
-          </span>
-          <Pills r={c.resolution} />
+          <div className="w-32 shrink-0" />
+          <div className="flex min-w-0 flex-1 flex-col justify-center py-1.5">
+            <div className="flex min-w-0 items-baseline font-sans text-[13px]">
+              <span className="mr-2 shrink-0 text-dim">↳</span>
+              <TrackName title={c.title ?? "?"} remix={c.remix} muted />
+            </div>
+            {c.artists?.length ? (
+              <div className="truncate pl-5 font-mono text-[11px] text-dim/80">
+                {c.artists.join(", ")}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center">
+            <Pills r={c.resolution} />
+          </div>
         </div>
       ))}
     </>
@@ -349,12 +386,15 @@ function TracklistTools({ tracks, title }: { tracks: Track[]; title: string }) {
     setTimeout(() => setNote(null), 1500);
   };
 
+  const button =
+    "cursor-pointer border border-border px-2.5 py-1 font-mono text-xs text-dim hover:border-accent hover:text-accent";
+
   return (
     <span className="flex items-center gap-2">
-      {note ? <span className="text-ok">{note}</span> : null}
+      {note ? <span className="font-mono text-xs text-ok">{note}</span> : null}
       <button
         onClick={async () => flash((await copy(tracklistText(tracks, title))) ? "copied" : "failed")}
-        className="text-dim hover:text-fg"
+        className={button}
         title="copy the tracklist as plain text"
       >
         copy
@@ -365,7 +405,7 @@ function TracklistTools({ tracks, title }: { tracks: Track[]; title: string }) {
           url.searchParams.delete("t");
           flash((await copy(url.toString())) ? "link copied" : "failed");
         }}
-        className="text-dim hover:text-fg"
+        className={button}
         title="copy a link to this set"
       >
         share
@@ -376,7 +416,7 @@ function TracklistTools({ tracks, title }: { tracks: Track[]; title: string }) {
           url.searchParams.set("t", formatTime(playhead));
           flash((await copy(url.toString())) ? `link @ ${formatTime(playhead)}` : "failed");
         }}
-        className="text-dim hover:text-fg"
+        className={button}
         title="copy a link that opens at the current position"
       >
         share @ time

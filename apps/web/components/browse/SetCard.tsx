@@ -10,11 +10,26 @@ export function StatLine({ s }: { s: SetlistSummary }) {
   const unreleased = cov.unreleased ?? 0;
   const length = formatLength(s.length_s);
   return (
-    <div className="font-mono text-[11px] text-dim">
+    <div className="font-mono text-xs text-dim">
       {s.track_count} trk
-      {resolved ? <span className="text-ok"> · {resolved}✓</span> : null}
-      {unreleased ? <span className="text-flag"> · {unreleased} ID</span> : null}
-      {length ? <span> · {length}</span> : null}
+      {resolved ? (
+        <span className="text-ok">
+          <span className="sep" />
+          {resolved}✓
+        </span>
+      ) : null}
+      {unreleased ? (
+        <span className="text-flag">
+          <span className="sep" />
+          {unreleased} ID
+        </span>
+      ) : null}
+      {length ? (
+        <span>
+          <span className="sep" />
+          {length}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -66,15 +81,17 @@ export function SetCard({ s }: { s: SetlistSummary }) {
         ) : null}
       </div>
 
+      {/* The parsed identity reads first — the raw 1001tracklists title is
+          long, noisy, and repeats all of it anyway. */}
       <div className="flex flex-1 flex-col justify-between gap-3 p-3">
-        <div>
-          <div className="font-sans text-sm font-semibold leading-snug text-fg group-hover:text-accent">
-            {s.title ?? "(untitled set)"}
+        <div className="min-w-0">
+          <div className="truncate font-sans text-base font-semibold leading-snug text-fg group-hover:text-accent">
+            {djs.join(", ") || s.title || "(untitled set)"}
           </div>
-          <div className="mt-1 truncate font-mono text-[11px] text-dim">
-            {djs.join(", ")}
-            {s.event ? ` · ${s.event}` : ""}
-            {s.date_recorded ? ` · ${s.date_recorded}` : ""}
+          <div className="mt-1 truncate font-mono text-xs text-dim">
+            {s.event ?? ""}
+            {s.event && s.date_recorded ? <span className="sep" /> : null}
+            {s.date_recorded ?? ""}
           </div>
         </div>
         <StatLine s={s} />

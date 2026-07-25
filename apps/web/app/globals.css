@@ -1,24 +1,30 @@
 @import "tailwindcss";
 
 /* Danceseek terminal-inspired design tokens (Tailwind v4 @theme).
-   Flat, dark, mono for data — the CLI's own color language. */
+   Flat, dark, mono for data — the CLI's own color language.
+
+   Brightened pass: the palette read as muddy against the near-black canvas.
+   Surfaces are separated by more than a hair now, `dim` is legible rather than
+   suggested, and the status colours carry real saturation. */
 @theme {
-  --color-bg: #0a0a0b;
-  --color-surface: #121214;
-  --color-surface-2: #1a1a1d;
-  --color-border: #2a2a2e;
-  --color-fg: #e6e6e6;
-  --color-dim: #8a8a90;
+  --color-bg: #08080a;
+  --color-surface: #141419;
+  --color-surface-2: #1f1f26;
+  --color-border: #3a3a45;
+  --color-fg: #f4f4f7;
+  --color-dim: #a6a6b2; /* was #8a8a90 — the main readability win */
 
   /* CLI status palette */
-  --color-ok: #4ec97a;      /* green  - resolved/success */
-  --color-warn: #e3c04b;    /* yellow - partial/skipped */
-  --color-link: #4fb8d6;    /* cyan   - links */
-  --color-flag: #c07bd6;    /* magenta- flags (mashup/w//ID) */
-  --color-accent: #3dd0c4;  /* phosphor accent - focus/live */
+  --color-ok: #5ee88f;      /* green   - resolved/success */
+  --color-warn: #ffd35e;    /* yellow  - partial/skipped */
+  --color-link: #5fd2f5;    /* cyan    - links */
+  --color-flag: #d78cec;    /* magenta - flags (mashup/w//ID) */
+  --color-accent: #45e8d6;  /* phosphor accent - focus/live */
+  --color-lastfm: #f0413a;  /* Last.fm red - connect/identity */
 
-  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* next/font injects the faces; the stacks below keep a sane fallback. */
+  --font-mono: var(--font-mono-face), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: var(--font-sans-face), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
   --radius: 0px;
 }
@@ -28,6 +34,9 @@ body {
   background: var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-sans);
+  /* Inter reads better with its optical sizing and tighter default tracking. */
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
 }
 
 /* Sharp corners, no shadows — set the terminal tone globally. */
@@ -39,4 +48,13 @@ body {
 ::selection {
   background: var(--color-accent);
   color: #000;
+}
+
+/* The set / event / date separator, used on cards and the setlist page. */
+.sep::before {
+  content: "◆";
+  color: var(--color-border);
+  font-size: 0.7em;
+  vertical-align: 0.1em;
+  padding: 0 0.5em;
 }

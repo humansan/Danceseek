@@ -35,6 +35,7 @@ export type LoadedSet = {
 };
 
 type PlayerState = {
+  /** The set the player is actually holding — not necessarily the page you're on. */
   loaded: LoadedSet | null;
   ready: boolean;
   playing: boolean;
@@ -43,7 +44,12 @@ type PlayerState = {
   /** Index into `loaded.windows` under the playhead, or -1. */
   currentIndex: number;
   current: CueWindow | null;
+  /** Offer a page's set to the player; adopted only if nothing is playing. */
   load: (set: LoadedSet) => void;
+  /** A set waiting to take over because something else is playing. */
+  pending: LoadedSet | null;
+  /** Hand the player to the pending set and start it — the user pressed play. */
+  adopt: () => void;
   play: () => void;
   pause: () => void;
   toggle: () => void;
@@ -76,7 +82,10 @@ type YTPlayer = {
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   getCurrentTime(): number;
   getDuration(): number;
+  /** Loads *and starts* — only for a switch the user asked for. */
   loadVideoById(id: string): void;
+  /** Loads without playing, so browsing never starts audio on its own. */
+  cueVideoById(id: string): void;
   destroy(): void;
 };
 
@@ -120,6 +129,7 @@ function findWindow(windows: CueWindow[], seconds: number): number {
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [loaded, setLoaded] = useState<LoadedSet | null>(null);
+  const [pending, setPending] = useState<LoadedSet | null>(null);
   const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [playhead, setPlayhead] = useState(0);
@@ -128,6 +138,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const playerRef = useRef<YTPlayer | null>(null);
   const hostElRef = useRef<HTMLDivElement | null>(null);
   const pendingVideoRef = useRef<string | null>(null);
+  // Set only by adopt() — a switch the user asked for starts playing; every
+  // other load merely cues, so browsing never starts audio by itself.
+  const autoplayRef = useRef(false);
 
   const hostRef = useCallback((el: HTMLDivElement | null) => {
     hostElRef.current = el;
@@ -142,7 +155,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (playerRef.current) {
       if (pendingVideoRef.current !== videoId) {
         pendingVideoRef.current = videoId;
-        playerRef.current.loadVideoById(videoId);
+        if (autoplayRef.current) playerRef.current.loadVideoById(videoId);
+        else playerRef.current.cueVideoById(videoId);
+        autoplayRef.current = false;
         setPlayhead(0);
       }
       return;
@@ -190,10 +205,41 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearInterval(id);
   }, [playing]);
 
-  const load = useCallback((next: LoadedSet) => {
-    setLoaded((prev) =>
-      prev && prev.setId === next.setId && prev.videoId === next.videoId ? prev : next,
-    );
+  /**
+   * A setlist page offering itself to the player.
+   *
+   * Taking it over unconditionally meant that opening a second set stopped the
+   * one you were listening to and started the new one — so you couldn't browse
+   * while a set played. Now the player only adopts a new set when nothing is
+   * actually playing; otherwise the set waits as `pending` until you press play.
+   */
+  const load = useCallback(
+    (next: LoadedSet) => {
+      setLoaded((prev) => {
+        if (prev && prev.setId === next.setId) {
+          setPending(null);
+          // Same set — refresh its windows (settings may have changed them).
+          return prev.videoId === next.videoId && prev.windows === next.windows ? prev : next;
+        }
+        if (prev && playing) {
+          setPending(next); // keep listening; the page offers a play button
+          return prev;
+        }
+        setPending(null);
+        return next;
+      });
+    },
+    [playing],
+  );
+
+  const adopt = useCallback(() => {
+    setPending((waiting) => {
+      if (waiting) {
+        autoplayRef.current = true; // the user asked for this one
+        setLoaded(waiting);
+      }
+      return null;
+    });
   }, []);
 
   const play = useCallback(() => playerRef.current?.playVideo(), []);
@@ -233,6 +279,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<PlayerState>(
     () => ({
       loaded,
+      pending,
+      adopt,
       ready,
       playing,
       playhead,
@@ -247,7 +295,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       step,
       hostRef,
     }),
-    [loaded, ready, playing, playhead, duration, currentIndex, windows, load, play, pause, toggle, seek, step, hostRef],
+    [loaded, pending, adopt, ready, playing, playhead, duration, currentIndex, windows, load, play, pause, toggle, seek, step, hostRef],
   );
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;

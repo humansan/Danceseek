@@ -5,28 +5,26 @@
  * should hold it.
  *
  * While the theatre slot is on screen the shell sits exactly on top of it, so
- * it reads as part of the page and scrolls with it. As the slot leaves the
- * viewport the shell interpolates down into the bottom bar's mini slot — the
- * "falls into the bar" transition — and stays there while you browse.
+ * it reads as part of the page and scrolls with it. Once the slot scrolls past,
+ * the shell snaps to the bottom bar's mini slot and stays there while you
+ * browse.
  *
  * Nothing here ever re-parents the iframe: only its position and size change,
  * which is what keeps playback alive across all of it.
  */
 
+import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePlayer } from "./PlayerProvider";
 import { usePlayerSlots } from "./slots";
 
 type Rect = { left: number; top: number; width: number; height: number };
 
-// The morph runs over the last stretch of the theatre slot's exit: fully
-// theatre while its bottom edge is below MORPH_START, fully docked above
-// MORPH_END (both measured from the top of the viewport).
-const MORPH_START = 300;
-const MORPH_END = 110;
-
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+// The player is either in the theatre slot or docked — no in-between. The
+// interpolated version looked smooth with trackpad scrolling but stuttered on
+// stepped mouse wheels, and it floated over the tracklist on the way down.
+// It now snaps when the slot's bottom edge crosses this line.
+const DOCK_AT = 140;
 
 function rectOf(el: HTMLElement): Rect {
   const r = el.getBoundingClientRect();
@@ -62,23 +60,18 @@ export function PlayerSurface() {
 
       const target = dock ? rectOf(dock) : fallbackDock();
       let rect = target;
-      let progress = 1;
+      let isDocked = true;
 
       if (theatre) {
         const big = rectOf(theatre);
-        progress = clamp01((MORPH_START - (big.top + big.height)) / (MORPH_START - MORPH_END));
-        rect = {
-          left: lerp(big.left, target.left, progress),
-          top: lerp(big.top, target.top, progress),
-          width: lerp(big.width, target.width, progress),
-          height: lerp(big.height, target.height, progress),
-        };
+        isDocked = big.top + big.height < DOCK_AT;
+        if (!isDocked) rect = big;
       }
 
       shell.style.transform = `translate(${rect.left}px, ${rect.top}px)`;
       shell.style.width = `${rect.width}px`;
       shell.style.height = `${rect.height}px`;
-      setDocked(progress > 0.5);
+      setDocked(isDocked);
     };
 
     const schedule = () => {
@@ -104,9 +97,12 @@ export function PlayerSurface() {
     <div
       ref={shellRef}
       aria-hidden={!loaded}
-      className={`fixed left-0 top-0 z-30 origin-top-left overflow-hidden border bg-black ${
+      // Docked, the player rises above the bar rather than sitting inside it —
+      // a brighter border is the only elevation available (shadows are off
+      // globally to keep the flat terminal look).
+      className={`fixed left-0 top-0 z-40 origin-top-left overflow-hidden bg-black ${
         loaded ? "" : "pointer-events-none opacity-0"
-      } ${docked ? "border-border" : "border-border"}`}
+      } ${docked ? "" : "border border-border border-t-0"}`}
       style={{ willChange: "transform,width,height" }}
     >
       {/* The YouTube API replaces this node with the iframe; it is created once
@@ -116,10 +112,26 @@ export function PlayerSurface() {
   );
 }
 
-/** Reserves the theatre space on a setlist page and registers it as the anchor. */
-export function TheatreSlot({ hasRecording }: { hasRecording: boolean }) {
+/**
+ * Reserves the theatre space on a setlist page.
+ *
+ * If another set is currently playing, this page does *not* claim the player —
+ * it shows a poster with a play button instead, so browsing never interrupts
+ * what you're listening to. Pressing play hands the player over.
+ */
+export function TheatreSlot({
+  setId,
+  videoId,
+}: {
+  setId: string;
+  videoId: string | null;
+}) {
+  const { loaded, pending, adopt } = usePlayer();
   const { setTheatre } = usePlayerSlots();
   const ownRef = useRef<HTMLDivElement | null>(null);
+
+  // True when the player is busy with a different set than the one on screen.
+  const waiting = Boolean(pending && pending.setId === setId && loaded?.setId !== setId);
 
   const attach = useCallback(
     (el: HTMLDivElement | null) => {
@@ -136,12 +148,43 @@ export function TheatreSlot({ hasRecording }: { hasRecording: boolean }) {
     [setTheatre],
   );
 
-  if (!hasRecording) {
+  // While waiting, release the anchor so the real player stays docked with the
+  // set that's actually playing rather than being dragged over this page.
+  useEffect(() => {
+    if (waiting) setTheatre((current) => (current === ownRef.current ? null : current));
+  }, [waiting, setTheatre]);
+
+  if (!videoId) {
     return (
-      <div className="flex aspect-video w-full items-center justify-center border border-border bg-surface font-mono text-xs text-dim">
+      <div className="flex aspect-video w-full items-center justify-center border border-border bg-surface font-mono text-sm text-dim">
         no set recording linked
       </div>
     );
   }
+
+  if (waiting) {
+    return (
+      <button
+        onClick={adopt}
+        className="group relative flex aspect-video w-full cursor-pointer items-center justify-center overflow-hidden border border-border bg-black"
+        title="play this set (stops the one currently playing)"
+      >
+        <Image
+          src={`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`}
+          alt=""
+          fill
+          className="object-cover opacity-45 transition-opacity group-hover:opacity-60"
+          unoptimized
+        />
+        <span className="relative flex items-center gap-3 border border-accent bg-bg/80 px-5 py-3 font-mono text-sm text-accent">
+          ▶ play this set
+        </span>
+        <span className="absolute bottom-3 font-mono text-[11px] text-dim">
+          another set is playing — this won&rsquo;t interrupt it until you press play
+        </span>
+      </button>
+    );
+  }
+
   return <div ref={attach} className="aspect-video w-full bg-black" />;
 }

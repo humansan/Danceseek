@@ -41,27 +41,40 @@ export default async function SetlistPage({ params }: { params: Promise<{ id: st
     <div>
       <LoadSet setId={id} videoId={vid} title={s.title ?? "set"} cues={cues} />
 
-      <div className="mb-3 flex items-baseline gap-3">
-        <Link href="/" className="font-mono text-xs text-link">
+      {/* THEATRE — the set recording, as large as the viewport allows and flush
+          against the top bar. Everything about the set reads *below* it, so
+          nothing pushes the video down the page. */}
+      <section className="-mx-4 -mt-6">
+        <div className="mx-auto w-full max-w-[min(100%,140vh)]">
+          <TheatreSlot setId={id} videoId={vid} />
+          {vid ? <NowPlaying estimated={cues?.live_capable === false} /> : null}
+        </div>
+      </section>
+
+      <div className="mt-5 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+        <Link href="/" className="font-mono text-sm text-link hover:text-accent">
           ← back
         </Link>
-        <span className="font-mono text-xs text-dim">
-          {djs.join(", ")}
-          {s.event ? ` · ${s.event}` : ""}
-          {s.date_recorded ? ` · ${s.date_recorded}` : ""}
+        <h1 className="font-sans text-xl font-semibold leading-snug text-fg">
+          {djs.join(", ") || s.title}
+        </h1>
+        <span className="font-mono text-sm text-dim">
+          {s.event ? (
+            <>
+              <span className="sep" />
+              {s.event}
+            </>
+          ) : null}
+          {s.date_recorded ? (
+            <>
+              <span className="sep" />
+              {s.date_recorded}
+            </>
+          ) : null}
         </span>
       </div>
 
-      {/* THEATRE — the set recording, large. Scrolling past it drops the player
-          into the bottom bar and reveals the tracklist below. */}
-      <section>
-        <TheatreSlot hasRecording={!!vid} />
-        {vid ? <NowPlaying estimated={cues?.live_capable === false} /> : null}
-      </section>
-
-      <h1 className="mt-5 font-sans text-lg font-semibold leading-snug">{s.title}</h1>
-
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_260px]">
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
         <TrackList tracks={tracks} cues={cues} title={s.title ?? "set"} />
 
         <aside className="order-first lg:order-last">

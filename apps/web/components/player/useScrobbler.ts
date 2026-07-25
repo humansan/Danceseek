@@ -38,9 +38,31 @@ export type ScrobbleState = {
 
 const keyOf = (position: number, component: number | null) => `${position}:${component ?? -1}`;
 
+/** The master switch is a device preference: on unless explicitly turned off. */
+const SWITCH_KEY = "danceseek:scrobbling";
+
+function storedSwitch(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(SWITCH_KEY) !== "off";
+}
+
 export function useScrobbler(connected: boolean): ScrobbleState {
   const { loaded, playing, playhead, duration, currentIndex } = usePlayer();
-  const [enabled, setEnabled] = useState(false);
+  // On by default once Last.fm is connected — having to arm it per set was
+  // just a way to miss scrobbles. The settings panel can freeze it globally.
+  const [enabled, setEnabledState] = useState(true);
+
+  // localStorage isn't readable during SSR, so adopt the stored value on mount.
+  useEffect(() => setEnabledState(storedSwitch()), []);
+
+  const setEnabled = useCallback((on: boolean) => {
+    setEnabledState(on);
+    try {
+      window.localStorage.setItem(SWITCH_KEY, on ? "on" : "off");
+    } catch {
+      /* private mode — the session default still applies */
+    }
+  }, []);
   const [done, setDone] = useState<Set<string>>(new Set());
   const [lastError, setLastError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

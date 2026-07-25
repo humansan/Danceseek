@@ -5,6 +5,9 @@
  * truth for "what's playing": the mini slot on the left is where the player
  * docks, the centre carries transport and a whole-set scrubber ticked at track
  * boundaries, and the right shows scrobble status.
+ *
+ * Full-bleed and percentage-based — the bar spans the viewport rather than the
+ * content column, so the scrubber gets all the room that's left over.
  */
 
 import Link from "next/link";
@@ -26,25 +29,25 @@ export function formatTime(seconds: number): string {
 function Transport() {
   const { playing, toggle, step } = usePlayer();
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-3">
       <button
         onClick={() => step(-1)}
         title="previous track"
-        className="px-2 py-1 font-mono text-xs text-dim hover:text-fg"
+        className="cursor-pointer px-1 text-xl leading-none text-dim hover:text-fg"
       >
         ⏮
       </button>
       <button
         onClick={toggle}
         title={playing ? "pause" : "play"}
-        className="border border-border px-3 py-1 font-mono text-xs text-fg hover:border-accent hover:text-accent"
+        className="flex h-11 w-11 cursor-pointer items-center justify-center border border-accent text-lg text-accent hover:bg-accent hover:text-bg"
       >
         {playing ? "⏸" : "▶"}
       </button>
       <button
         onClick={() => step(1)}
         title="next track"
-        className="px-2 py-1 font-mono text-xs text-dim hover:text-fg"
+        className="cursor-pointer px-1 text-xl leading-none text-dim hover:text-fg"
       >
         ⏭
       </button>
@@ -52,17 +55,19 @@ function Transport() {
   );
 }
 
-/** Whole-set scrubber; ticks mark where each track begins. */
+/** Whole-set scrubber; ticks mark where each track begins, lit once passed. */
 function Scrubber() {
   const { playhead, duration, seek, loaded } = usePlayer();
   const windows = loaded?.windows ?? [];
   const span = duration || windows.at(-1)?.end_s || 0;
+  const pct = span ? Math.min(100, (playhead / span) * 100) : 0;
 
   return (
-    <div className="flex flex-1 items-center gap-2">
-      <span className="w-12 shrink-0 text-right font-mono text-[11px] text-dim">
+    <div className="flex flex-1 items-center gap-3">
+      <span className="w-14 shrink-0 text-right font-mono text-xs text-dim">
         {formatTime(playhead)}
       </span>
+
       <div
         role="slider"
         aria-label="seek"
@@ -75,36 +80,44 @@ function Scrubber() {
           const box = e.currentTarget.getBoundingClientRect();
           seek(((e.clientX - box.left) / box.width) * span);
         }}
-        className="relative h-4 flex-1 cursor-pointer"
+        className="group relative h-6 flex-1 cursor-pointer"
       >
-        <div className="absolute top-1/2 h-[3px] w-full -translate-y-1/2 bg-surface-2">
-          <div
-            className="h-full bg-accent"
-            style={{ width: span ? `${Math.min(100, (playhead / span) * 100)}%` : "0%" }}
-          />
+        {/* the track itself */}
+        <div className="absolute top-1/2 h-1.5 w-full -translate-y-1/2 bg-surface-2">
+          <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
         </div>
-        {/* Track boundaries — the set's shape at a glance. Only real rows: a
-            mashup's components share their parent's position and window, so
-            including them would stack duplicate ticks on the same mark. */}
+
+        {/* Track boundaries. Only real rows: a mashup's components share their
+            parent's position and window, so including them would stack
+            duplicate ticks on the same mark. */}
         {span
           ? windows
               .filter((w) => w.component_index == null)
-              .map((w) => (
-                <span
-                  key={w.position}
-                  className="absolute top-1/2 h-2 w-px -translate-y-1/2 bg-border"
-                  style={{ left: `${(w.start_s / span) * 100}%` }}
-                />
-              ))
+              .map((w) => {
+                const passed = playhead >= w.start_s;
+                return (
+                  <span
+                    key={w.position}
+                    title={w.label}
+                    className={`absolute top-1/2 h-4 w-px -translate-y-1/2 ${
+                      passed ? "bg-accent" : "bg-white/70"
+                    }`}
+                    style={{ left: `${(w.start_s / span) * 100}%` }}
+                  />
+                );
+              })
           : null}
+
+        {/* playhead handle */}
       </div>
-      <span className="w-12 shrink-0 font-mono text-[11px] text-dim">{formatTime(span)}</span>
+
+      <span className="w-14 shrink-0 font-mono text-xs text-dim">{formatTime(span)}</span>
     </div>
   );
 }
 
 export function BottomBar() {
-  const { loaded, current, playhead } = usePlayer();
+  const { loaded, current } = usePlayer();
   const { setDock } = usePlayerSlots();
 
   // The bar exists only once a set is loaded; the dock ref must still be
@@ -115,17 +128,22 @@ export function BottomBar() {
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-surface">
-      <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-2">
-        {/* left — the dock the player falls into, plus what's playing */}
-        <div className="flex min-w-0 shrink-0 items-center gap-3" style={{ width: 300 }}>
-          <div ref={setDock} className="h-[72px] w-32 shrink-0 bg-black" />
-          <div className="min-w-0">
-            <div className="truncate font-mono text-xs text-fg">
-              {current ? current.label : estimated ? "no cue times" : "—"}
+      <div className="flex h-20 w-full items-center gap-5 px-5">
+        {/* left — the dock the player lands in, plus what's playing.
+            The slot is taller than the bar so the player reads as hovering
+            above it rather than being boxed inside. */}
+        <div className="flex w-[28%] min-w-0 shrink-0 items-center gap-3">
+          <div ref={setDock} className="-mt-6 h-[76px] w-[135px] shrink-0 bg-black" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-sans text-sm font-medium text-fg">
+              {current ? (current.scrobble_track ?? current.label) : estimated ? "no cue times" : "—"}
+            </div>
+            <div className="truncate font-mono text-xs text-dim">
+              {current?.scrobble_artist ?? ""}
             </div>
             <Link
               href={`/set/${loaded.setId}`}
-              className="block truncate font-mono text-[11px] text-dim hover:text-link"
+              className="block truncate font-mono text-xs text-dim hover:text-link"
             >
               {loaded.title}
             </Link>
@@ -135,7 +153,9 @@ export function BottomBar() {
         <Transport />
         <Scrubber />
 
-        <ScrobbleStatus estimated={estimated} />
+        <div className="flex w-[10%] shrink-0 justify-end">
+          <ScrobbleStatus estimated={estimated} />
+        </div>
       </div>
     </div>
   );
@@ -147,11 +167,11 @@ function ScrobbleStatus({ estimated }: { estimated: boolean }) {
 
   if (!connected) {
     return (
-      <div className="shrink-0 text-right font-mono text-[11px] text-dim">
-        <a href="/api/auth/lastfm/start" className="hover:text-link">
+      <div className="text-right font-mono text-xs text-dim">
+        <a href="/api/auth/lastfm/start" className="text-lastfm hover:underline">
           connect last.fm
         </a>
-        <div className="text-[10px] text-border">to scrobble</div>
+        <div className="text-[11px] text-border">to scrobble</div>
       </div>
     );
   }
@@ -159,30 +179,26 @@ function ScrobbleStatus({ estimated }: { estimated: boolean }) {
   if (estimated) {
     return (
       <div
-        className="shrink-0 text-right font-mono text-[11px] text-warn"
+        className="text-right font-mono text-xs text-warn"
         title="this set has no cue times, so live scrobbling is unavailable — use scrobble ▸ whole set"
       >
         timings estimated
-        <div className="text-[10px] text-border">live sync off</div>
+        <div className="text-[11px] text-border">live sync off</div>
       </div>
     );
   }
 
   return (
-    <div className="shrink-0 text-right font-mono text-[11px]">
+    <div className="text-right font-mono text-xs">
       <button
         onClick={() => setEnabled(!enabled)}
-        className={enabled ? "text-ok" : "text-dim hover:text-fg"}
-        title={enabled ? "live scrobbling on — click to stop" : "start live scrobbling"}
+        className={`cursor-pointer ${enabled ? "text-ok" : "text-dim hover:text-fg"}`}
+        title={enabled ? "scrobbling on — click to pause" : "scrobbling paused — click to resume"}
       >
         scrobbling {enabled ? "✓" : "off"}
       </button>
-      <div className="text-[10px] text-border">
-        {lastError ? (
-          <span className="text-warn">{lastError}</span>
-        ) : (
-          `${done.size} logged`
-        )}
+      <div className="text-[11px] text-border">
+        {lastError ? <span className="text-warn">{lastError}</span> : `${done.size} logged`}
       </div>
     </div>
   );
