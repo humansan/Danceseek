@@ -45,36 +45,39 @@ export default async function SetlistPage({ params }: { params: Promise<{ id: st
           against the top bar. Everything about the set reads *below* it, so
           nothing pushes the video down the page. */}
       <section className="-mx-4 -mt-6">
-        <div className="mx-auto w-full max-w-[min(100%,140vh)]">
+        <div className="mx-auto w-full max-w-[140vh]">
           <TheatreSlot setId={id} videoId={vid} />
           {vid ? <NowPlaying estimated={cues?.live_capable === false} /> : null}
         </div>
       </section>
 
-      <div className="mt-5 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <Link href="/" className="font-mono text-sm text-link hover:text-accent">
-          ← back
+      <div className="mt-5 flex flex-col items-baseline max-w-[140vh] mx-auto">
+
+        <Link href="/" className="font-mono text-xs text-link/60 hover:text-accent">
+            ← back
         </Link>
-        <h1 className="font-sans text-xl font-semibold leading-snug text-fg">
-          {djs.join(", ") || s.title}
-        </h1>
-        <span className="font-mono text-sm text-dim">
-          {s.event ? (
-            <>
-              <span className="sep" />
-              {s.event}
-            </>
-          ) : null}
-          {s.date_recorded ? (
-            <>
-              <span className="sep" />
-              {s.date_recorded}
-            </>
-          ) : null}
-        </span>
+        <div className="flex items-baseline w-full justify-center">
+          <h1 className="font-sans text-2xl font-semibold leading-snug text-fg">
+            {djs.join(", ") || s.title}
+          </h1>
+          <span className="font-mono text-base text-dim">
+            {s.event ? (
+              <>
+                <span className="sep" />
+                {s.event}
+              </>
+            ) : null}
+            {s.date_recorded ? (
+              <>
+                <span className="sep" />
+                {s.date_recorded}
+              </>
+            ) : null}
+          </span>
+        </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
+      <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px] max-w-[140vh] mx-auto">
         <TrackList tracks={tracks} cues={cues} title={s.title ?? "set"} />
 
         <aside className="order-first lg:order-last">
