@@ -24,6 +24,7 @@ Rules:
 - Last.fm candidates are canonical entries sorted by listener count; prefer the highest-listeners entry that matches. Its exact spelling is the scrobble identity.
 - Many DJ-set tracks are unreleased bootlegs/edits that exist on NO platform. Returning null for any or all platforms is a correct, common outcome. Never force a weak match.
 - confidence: your certainty across the picks for that track (0-1). Below 0.75 the picks are discarded, so don't report matches you doubt.
+- Answer with the candidate's KEY exactly as shown ("L1", "S2", "Y1") — never the candidate's title or artist text.
 Return one entry per track, in the same order, echoing its number."""
 
 USER_PROMPT = """Match these {count} tracks:
@@ -50,18 +51,43 @@ def _fmt_duration(ms: int | None) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def _candidate_label(platform: str, c: dict) -> str:
+    """The exact line the model sees for a candidate (minus its key)."""
+    if platform == "spotify":
+        return f"{', '.join(c['artists'])} - {c['title']} ({_fmt_duration(c['duration_ms'])})"
+    if platform == "youtube":
+        return f"{c['title']} [uploader: {c['artists'][0]}] ({_fmt_duration(c['duration_ms'])})"
+    return f"{c['artist']} - {c['track']} (listeners={c['listeners']})"
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+def _candidate_aliases(platform: str, c: dict) -> set[str]:
+    """Strings that unambiguously name this candidate, for when the model
+    answers with the candidate's text instead of its key."""
+    if platform == "spotify":
+        core = f"{', '.join(c['artists'])} - {c['title']}"
+    elif platform == "youtube":
+        core = c["title"]
+    else:
+        core = f"{c['artist']} - {c['track']}"
+    return {_norm(_candidate_label(platform, c)), _norm(core)}
+
+
 def _format_block(index: int, uc: UnitCandidates) -> str:
     u = uc.unit
     lines = [
         f"#{index} [{u.kind}] {u.raw_text}"
         f"  (parsed: artists={u.artists}, title={u.title!r}, version={u.remix!r})"
     ]
-    for i, c in enumerate(uc.spotify, 1):
-        lines.append(f"  S{i}: {', '.join(c['artists'])} - {c['title']} ({_fmt_duration(c['duration_ms'])})")
-    for i, c in enumerate(uc.youtube, 1):
-        lines.append(f"  Y{i}: {c['title']} [uploader: {c['artists'][0]}] ({_fmt_duration(c['duration_ms'])})")
-    for i, c in enumerate(uc.lastfm, 1):
-        lines.append(f"  L{i}: {c['artist']} - {c['track']} (listeners={c['listeners']})")
+    for platform, candidates in (
+        ("spotify", uc.spotify), ("youtube", uc.youtube), ("lastfm", uc.lastfm)
+    ):
+        letter = platform[0].upper() if platform != "lastfm" else "L"
+        for i, c in enumerate(candidates, 1):
+            lines.append(f"  {letter}{i}: {_candidate_label(platform, c)}")
     if len(lines) == 1:
         lines.append("  (no candidates on any platform)")
     return "\n".join(lines)
@@ -76,12 +102,33 @@ def _build_llm():
     )
 
 
-def _key_to_candidate(key: str | None, candidates: list) -> dict | None:
-    """'S2' -> candidates[1]; invalid/hallucinated keys -> None."""
-    if not key or len(key) < 2 or not key[1:].isdigit():
+def _key_to_candidate(key: str | None, candidates: list, platform: str) -> dict | None:
+    """Resolve the model's answer to one of the gathered candidates, or None.
+
+    Accepts what small models actually emit, not just the documented form:
+    'S2', a bare '2', 'S2: Artist - Title', or — the common drift — the
+    candidate's own text with no key at all. Text is matched by exact
+    (normalized) equality against the rendered candidate line, so this stays a
+    strict identification: anything that doesn't name a gathered candidate is
+    still discarded rather than guessed at.
+    """
+    if not key:
         return None
-    idx = int(key[1:]) - 1
-    return candidates[idx] if 0 <= idx < len(candidates) else None
+    text = key.strip()
+
+    # Positional key: "L1", "1", or "L1: <label>".
+    token = text.split(":", 1)[0].strip()
+    digits = token[1:] if len(token) > 1 and token[0].isalpha() else token
+    if digits.isdigit():
+        idx = int(digits) - 1
+        return candidates[idx] if 0 <= idx < len(candidates) else None
+
+    # The model echoed the candidate instead of its key.
+    target = _norm(text)
+    for candidate in candidates:
+        if target in _candidate_aliases(platform, candidate):
+            return candidate
+    return None
 
 
 def apply_pick(
@@ -93,11 +140,21 @@ def apply_pick(
     (clients with missing keys don't count against "resolved")."""
     spotify = youtube = lastfm = None
     confidence = 0.0
+    unparsed: list[str] = []
     if pick is not None and pick.confidence >= settings.resolve_min_confidence:
         confidence = round(min(pick.confidence, 1.0), 3)
-        s = _key_to_candidate(pick.spotify, uc.spotify)
-        y = _key_to_candidate(pick.youtube, uc.youtube)
-        lf = _key_to_candidate(pick.lastfm, uc.lastfm)
+        s = _key_to_candidate(pick.spotify, uc.spotify, "spotify")
+        y = _key_to_candidate(pick.youtube, uc.youtube, "youtube")
+        lf = _key_to_candidate(pick.lastfm, uc.lastfm, "lastfm")
+        # A pick we couldn't tie to a candidate is dropped — but say so, so a
+        # future change in how the model answers is visible instead of silent.
+        unparsed = [
+            f"{name}={answer!r}"
+            for name, answer, resolved in (
+                ("spotify", pick.spotify, s), ("youtube", pick.youtube, y), ("lastfm", pick.lastfm, lf)
+            )
+            if answer and resolved is None
+        ]
         spotify = PlatformMatch(**s) if s else None
         youtube = PlatformMatch(**y) if y else None
         lastfm = (
@@ -119,6 +176,7 @@ def apply_pick(
     return Resolution(
         status=status, spotify=spotify, youtube=youtube, lastfm=lastfm,
         confidence=confidence if matched else 0.0, method="batch_llm",
+        notes=("unmatched pick keys: " + ", ".join(unparsed)) if unparsed else None,
     )
 
 

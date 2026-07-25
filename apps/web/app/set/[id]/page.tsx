@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { getSetlist, type Track } from "@/lib/api";
+import { TheatreSlot } from "@/components/player/PlayerSurface";
+import { getCues, getSetlist } from "@/lib/api";
+import { LoadSet, NowPlaying, TrackList } from "./SetClient";
 
 export const dynamic = "force-dynamic";
 
@@ -7,53 +9,6 @@ function youtubeId(url: string | null): string | null {
   if (!url) return null;
   const m = url.match(/[?&]v=([\w-]+)/) ?? url.match(/youtu\.be\/([\w-]+)/);
   return m ? m[1] : null;
-}
-
-function Pill({ label, on, color }: { label: string; on: boolean; color: string }) {
-  return (
-    <span
-      className={`inline-block border px-1 font-mono text-[10px] ${
-        on ? `${color} border-current` : "border-border text-border"
-      }`}
-    >
-      {label}
-    </span>
-  );
-}
-
-function TrackRow({ t }: { t: Track }) {
-  const r = t.resolution;
-  const layered = t.played_with !== null;
-  const isMashup = t.mashup_components.length > 0;
-  return (
-    <div
-      className={`flex items-baseline gap-3 border-b border-border/60 px-2 py-1.5 font-mono text-sm hover:bg-surface-2 ${
-        layered ? "pl-6" : ""
-      }`}
-    >
-      <span className="w-14 shrink-0 text-right text-xs text-dim">{t.cue_time ?? ""}</span>
-      <span className="w-6 shrink-0 text-right text-xs text-dim">
-        {t.source_track_number ?? (layered ? "w/" : "")}
-      </span>
-      <span className="flex-1 truncate">
-        {t.is_id ? (
-          <span className="text-flag">[ID · unreleased]</span>
-        ) : (
-          <>
-            <span className="text-fg">{t.artists.join(", ") || t.raw_text}</span>
-            {t.title ? <span className="text-dim"> — {t.title}</span> : null}
-            {t.remix ? <span className="text-link"> ({t.remix})</span> : null}
-            {isMashup ? <span className="ml-1 text-flag">⋈</span> : null}
-          </>
-        )}
-      </span>
-      <span className="flex shrink-0 gap-1">
-        <Pill label="S" on={!!r?.spotify} color="text-ok" />
-        <Pill label="Y" on={!!r?.youtube} color="text-warn" />
-        <Pill label="L" on={!!r?.lastfm} color="text-link" />
-      </span>
-    </div>
-  );
 }
 
 export default async function SetlistPage({ params }: { params: Promise<{ id: string }> }) {
@@ -72,80 +27,81 @@ export default async function SetlistPage({ params }: { params: Promise<{ id: st
   }
 
   const { setlist: s, status, coverage } = detail;
-  const vid = youtubeId(s.media_url);
+  const vid = youtubeId(s.media_url ?? null);
   const cov = coverage ?? {};
+  const tracks = s.tracks ?? [];
+  const genres = s.genres ?? [];
+  const djs = s.dj_names ?? [];
+
+  // Cue windows come from the API so the highlight and the scrobbler can never
+  // disagree. The player's real duration refines the last window client-side.
+  const cues = await getCues(id);
 
   return (
     <div>
-      <Link href="/" className="font-mono text-xs text-link">
-        ← back
-      </Link>
-      {/* three columns: tracklist · player · metadata */}
-      <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px_240px]">
-        {/* LEFT — tracklist */}
-        <section className="order-3 border border-border bg-surface lg:order-1">
-          <div className="border-b border-border px-2 py-1.5 font-mono text-xs text-dim">
-            tracklist · {s.tracks.length}
-          </div>
-          <div className="max-h-[70vh] overflow-y-auto">
-            {s.tracks.map((t) => (
-              <TrackRow key={t.position} t={t} />
-            ))}
-          </div>
-        </section>
+      <LoadSet setId={id} videoId={vid} title={s.title ?? "set"} cues={cues} />
 
-        {/* CENTER — the actual set recording */}
-        <section className="order-1 lg:order-2">
-          {vid ? (
-            <div className="aspect-video w-full border border-border bg-black">
-              <iframe
-                className="h-full w-full"
-                src={`https://www.youtube.com/embed/${vid}`}
-                title={s.title ?? "set"}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; picture-in-picture"
-                allowFullScreen
-              />
-            </div>
-          ) : (
-            <div className="flex aspect-video items-center justify-center border border-border bg-surface font-mono text-xs text-dim">
-              no set recording linked
-            </div>
-          )}
-        </section>
+      <div className="mb-3 flex items-baseline gap-3">
+        <Link href="/" className="font-mono text-xs text-link">
+          ← back
+        </Link>
+        <span className="font-mono text-xs text-dim">
+          {djs.join(", ")}
+          {s.event ? ` · ${s.event}` : ""}
+          {s.date_recorded ? ` · ${s.date_recorded}` : ""}
+        </span>
+      </div>
 
-        {/* RIGHT — metadata & actions */}
-        <aside className="order-2 border border-border bg-surface p-3 lg:order-3">
-          <h1 className="font-sans text-sm font-semibold leading-snug">{s.title}</h1>
-          <div className="mt-2 font-mono text-xs text-dim">{s.event}</div>
-          <div className="font-mono text-xs text-dim">{s.date_recorded}</div>
-          <div className="mt-3 font-mono text-xs">
-            <span className="text-ok">{status}</span>
-            <span className="text-dim">
-              {" · "}
-              {(cov.resolved ?? 0) + (cov.partial ?? 0)}/{s.tracks.length} matched
-              {cov.unreleased ? ` · ${cov.unreleased} ID` : ""}
-            </span>
-          </div>
-          <div className="mt-3 flex flex-col gap-1.5">
-            <button className="border border-border px-2 py-1.5 text-left font-mono text-xs text-dim hover:text-fg">
-              scrobble ▸
-            </button>
-            <button
-              className="border border-border px-2 py-1.5 text-left font-mono text-xs text-dim disabled:opacity-50"
-              disabled={status !== "resolved"}
-            >
-              export ▸ {status !== "resolved" ? "(locked)" : ""}
-            </button>
-          </div>
-          {s.genres.length ? (
-            <div className="mt-3 flex flex-wrap gap-1">
-              {s.genres.map((g) => (
-                <span key={g} className="border border-border px-1 font-mono text-[10px] text-dim">
-                  {g}
-                </span>
-              ))}
+      {/* THEATRE — the set recording, large. Scrolling past it drops the player
+          into the bottom bar and reveals the tracklist below. */}
+      <section>
+        <TheatreSlot hasRecording={!!vid} />
+        {vid ? <NowPlaying estimated={cues?.live_capable === false} /> : null}
+      </section>
+
+      <h1 className="mt-5 font-sans text-lg font-semibold leading-snug">{s.title}</h1>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_260px]">
+        <TrackList tracks={tracks} cues={cues} />
+
+        <aside className="order-first lg:order-last">
+          <div className="border border-border bg-surface p-3">
+            <div className="font-mono text-xs">
+              <span className={status === "resolved" ? "text-ok" : "text-warn"}>{status}</span>
+              <span className="text-dim">
+                {" · "}
+                {(cov.resolved ?? 0) + (cov.partial ?? 0)}/{tracks.length} matched
+                {cov.unreleased ? ` · ${cov.unreleased} ID` : ""}
+              </span>
             </div>
-          ) : null}
+            {cov.platforms?.length ? (
+              <div className="mt-1 font-mono text-[11px] text-dim">
+                searched: {cov.platforms.join(", ")}
+              </div>
+            ) : null}
+
+            <div className="mt-3 flex flex-col gap-1.5">
+              <button className="border border-border px-2 py-1.5 text-left font-mono text-xs text-dim hover:text-fg">
+                scrobble ▸
+              </button>
+              <button
+                className="border border-border px-2 py-1.5 text-left font-mono text-xs text-dim disabled:opacity-50"
+                disabled={status !== "resolved"}
+              >
+                export ▸ {status !== "resolved" ? "(locked)" : ""}
+              </button>
+            </div>
+
+            {genres.length ? (
+              <div className="mt-3 flex flex-wrap gap-1">
+                {genres.map((g) => (
+                  <span key={g} className="border border-border px-1 font-mono text-[10px] text-dim">
+                    {g}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </aside>
       </div>
     </div>

@@ -15,7 +15,10 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Iterable
+
+ALL_PLATFORMS = ("spotify", "youtube", "lastfm")
+LASTFM_ONLY = ("lastfm",)
 
 from .. import store
 from ..config import settings
@@ -37,6 +40,9 @@ class ResolveSummary:
     registry_hits: int = 0
     llm_batches: int = 0
     warnings: list[str] = field(default_factory=list)
+    # Platforms actually searched (requested AND usable) — recorded so a later
+    # reader can tell "no Spotify match" apart from "Spotify was never tried".
+    platforms: list[str] = field(default_factory=list)
 
     def count(self, status: str) -> None:
         setattr(self, status, getattr(self, status) + 1)
@@ -75,24 +81,52 @@ def build_coverage(setlist: Setlist, summary: "ResolveSummary") -> dict:
         "spotify": spotify,
         "youtube": youtube,
         "lastfm": lastfm,
+        # Which platforms this run searched. A Last.fm-only run legitimately
+        # has spotify=youtube=0; without this the UI can't tell that from a
+        # full run that simply found nothing.
+        "platforms": summary.platforms,
     }
 
 
 class _Clients:
-    """Lazily-built platform clients; missing keys disable a platform with a warning."""
+    """Platform clients for this run.
 
-    def __init__(self, summary: ResolveSummary) -> None:
+    Two things switch a platform off: not asking for it (`platforms`) and a
+    missing API key (which warns). A disabled platform costs nothing — no
+    searches, and no candidate lines in the LLM prompt — which is what makes
+    a Last.fm-only run substantially faster than a full one.
+    """
+
+    def __init__(self, summary: ResolveSummary, platforms: Iterable[str] | None = None) -> None:
+        enabled = set(platforms) if platforms is not None else set(ALL_PLATFORMS)
+        unknown = enabled - set(ALL_PLATFORMS)
+        if unknown:
+            raise ValueError(f"Unknown platform(s): {sorted(unknown)}; expected {list(ALL_PLATFORMS)}")
+        if not enabled:
+            raise ValueError("At least one platform must be enabled")
+        self.enabled = enabled
+
         self.spotify: SpotifyClient | None = None
         self.lastfm: LastfmClient | None = None
-        self.youtube: YouTubeSearch | None = YouTubeSearch()
-        try:
-            self.spotify = SpotifyClient()
-        except ClientError as e:
-            summary.warnings.append(f"Spotify disabled: {e}")
-        try:
-            self.lastfm = LastfmClient()
-        except ClientError as e:
-            summary.warnings.append(f"Last.fm disabled: {e}")
+        self.youtube: YouTubeSearch | None = YouTubeSearch() if "youtube" in enabled else None
+        if "spotify" in enabled:
+            try:
+                self.spotify = SpotifyClient()
+            except ClientError as e:
+                summary.warnings.append(f"Spotify disabled: {e}")
+        if "lastfm" in enabled:
+            try:
+                self.lastfm = LastfmClient()
+            except ClientError as e:
+                summary.warnings.append(f"Last.fm disabled: {e}")
+
+    def active(self) -> list[str]:
+        """Platforms that are both requested and actually usable."""
+        return [
+            p for p, client in (
+                ("spotify", self.spotify), ("youtube", self.youtube), ("lastfm", self.lastfm)
+            ) if client
+        ]
 
     def applicable(self, unit: Unit) -> list[str]:
         if unit.kind == "mashup_row":
@@ -123,6 +157,7 @@ def _log_line(log_path, unit: Unit, resolution: Resolution, extra: dict) -> None
         "status": resolution.status,
         "method": resolution.method,
         "confidence": resolution.confidence,
+        "notes": resolution.notes,
         "chosen": {
             "spotify": resolution.spotify.id if resolution.spotify else None,
             "youtube": resolution.youtube.id if resolution.youtube else None,
@@ -139,6 +174,7 @@ def _log_line(log_path, unit: Unit, resolution: Resolution, extra: dict) -> None
 def _collect_pending(
     setlist: Setlist,
     registry: Registry,
+    clients: _Clients,
     summary: ResolveSummary,
     force: bool,
     limit: int | None,
@@ -149,6 +185,19 @@ def _collect_pending(
     processed_rows = 0
 
     def handle(unit: Unit, stamp: Callable[[Resolution], None]) -> None:
+        if not clients.applicable(unit):
+            # Nothing to search this unit against — most often a mashup *row*
+            # (whole-mashup matching is YouTube-only) on a Last.fm-only run.
+            # There is no canonical Last.fm entry for an "A vs. B" blob, so
+            # no_match is the honest outcome; its components resolve normally.
+            res = Resolution(
+                status="no_match", method="skip",
+                notes=f"no enabled platform applies to a {unit.kind}",
+            )
+            stamp(res)
+            summary.count("no_match")
+            _log_line(log_path, unit, res, {"skipped_reason": "no_applicable_platform"})
+            return
         if unit.kind != "mashup_row" and not force:
             cached = registry.lookup(unit.artists, unit.title, unit.remix)
             if cached is not None:
@@ -208,19 +257,33 @@ def resolve_setlist(
     setlist: Setlist,
     force: bool = False,
     limit: int | None = None,
+    platforms: Iterable[str] | None = None,
+    on_progress: Callable[[str, int, int], None] | None = None,
 ) -> ResolveSummary:
-    """Resolve all (or the first `limit`) unresolved rows; persists incrementally."""
+    """Resolve all (or the first `limit`) unresolved rows; persists incrementally.
+
+    platforms:   which services to match against; None means all of
+                 ("spotify", "youtube", "lastfm"). Pass LASTFM_ONLY for the
+                 scrobble-only path — one search family instead of three and a
+                 much shorter LLM prompt, so it is markedly faster and cheaper.
+    on_progress: optional (phase, done, total) callback for UI progress.
+    """
     summary = ResolveSummary()
-    clients = _Clients(summary)
+    clients = _Clients(summary, platforms)
     registry = get_registry()
     log_path = settings.resolution_logs_dir / f"{url_digest(setlist.source_url)}.jsonl"
 
-    pending = _collect_pending(setlist, registry, summary, force, limit, log_path)
+    def progress(phase: str, done: int, total: int) -> None:
+        if on_progress is not None:
+            on_progress(phase, done, total)
+
+    pending = _collect_pending(setlist, registry, clients, summary, force, limit, log_path)
 
     # Phase 2: searches
     gathered: list[UnitCandidates] = []
     for p in pending:
         gathered.append(gather(p.unit, clients, limit=settings.resolve_candidates_per_platform))
+        progress("searching", len(gathered), len(pending))
         time.sleep(settings.resolve_api_delay_seconds)
 
     # Phase 3+4: batched LLM picks, stamp + registry + log + incremental saves
@@ -260,8 +323,10 @@ def resolve_setlist(
                 },
             )
         store.save(setlist)  # crash-safe per batch
+        progress("matching", min(start + batch_size, len(gathered)), len(gathered))
 
     store.save(setlist)
+    summary.platforms = clients.active()
 
     # Auto-publish the processed setlist to the Neon cache table (best-effort).
     from .. import db

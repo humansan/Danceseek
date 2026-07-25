@@ -1,37 +1,42 @@
-"""Danceseek API — FastAPI over the SoundSeek pipeline + Neon cache.
+"""Danceseek API — a thin read layer over the Neon catalog.
 
-Read endpoints (browse + detail + search) plus the add flow: POST enqueues a
-background `process` job (the worker does fetch -> normalize -> resolve) and
-returns instantly; clients watch progress over SSE. Export lands in a later
-phase.
+Deliberately lean: this service does **no** ingestion. Scraping needs a real
+browser with a Cloudflare-cleared profile and normalizing needs the LLM, so all
+of that runs on the maintainer's machine via the ingest console
+(`apps/ingest`), which writes results straight to Neon. What's left here is
+browse, detail, and a network-free export preview — cheap, fast, and safe to
+deploy anywhere.
+
+Scrobbling endpoints land in a later phase; ingestion comes back to the server
+only if/when the managed-browser backend does.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import soundseek.config  # noqa: F401 — loads .env (DATABASE_URL etc.)
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from soundseek import db
-from soundseek.models import ParserInfo, Setlist
+from soundseek import db, session
+from soundseek.config import settings
+from soundseek.lastfm import auth as lastfm_auth
+from soundseek.models import Setlist
+from soundseek.scrobble.windows import WindowSet, build_windows
 
-# SSE safety cap: at ~1s/iteration this bounds a stream to ~20 min even if a
-# client never disconnects and a job never terminates.
-_SSE_MAX_ITERS = 1200
-_RERESOLVE_GATE_DAYS = 30
+app = FastAPI(title="Danceseek API", version="0.3.0")
 
-app = FastAPI(title="Danceseek API", version="0.1.0")
-
-# Next.js dev server + (later) the deployed web origin.
+# The browser normally reaches us through the web app's /api/* rewrite (same
+# origin, so the session cookie just works). CORS with credentials is here for
+# direct calls; the origin list must stay explicit — browsers reject "*" plus
+# credentials.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", settings.web_url],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -63,18 +68,180 @@ class SetlistDetail(BaseModel):
     created_at: str | None
 
 
-class AddSetlistRequest(BaseModel):
-    url: str
+class ExportPreviewRequest(BaseModel):
+    target: Literal["spotify", "youtube"]
+    expand_mashups: bool = True
+    skip_played_with: bool = False
 
 
-class AddSetlistResponse(BaseModel):
+class ExportPlanItem(BaseModel):
     id: str
-    status: str
+    label: str
+
+
+class ExportSkippedItem(BaseModel):
+    label: str
+    reason: str
+
+
+class ExportPreview(BaseModel):
+    """Dry-run export plan: what would be added / skipped, per target platform."""
+
+    target: str
+    added: int
+    total_considered: int
+    items: list[ExportPlanItem]
+    skipped: list[ExportSkippedItem]
 
 
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Last.fm identity. The session key Last.fm hands back authorizes scrobbling on
+# that account forever, so it stays in the database: the browser only ever gets
+# a signed cookie naming which user it is.
+# ---------------------------------------------------------------------------
+
+
+class Me(BaseModel):
+    lastfm_username: str | None = None
+    connected: bool = False
+    # True when a Last.fm approval is in flight: the user has been sent to
+    # Last.fm but we never got the callback. Last.fm only redirects back when
+    # the API account has a Callback URL registered — without one it just shows
+    # its own "connected" page — so the token has to be redeemable on return.
+    pending: bool = False
+
+
+def current_user_id(ds_session: str | None = Cookie(default=None)) -> str | None:
+    payload = session.verify(ds_session)
+    return payload.get("uid") if payload else None
+
+
+def pending_token(ds_pending: str | None = Cookie(default=None)) -> str | None:
+    payload = session.verify(ds_pending, max_age=session.PENDING_MAX_AGE)
+    return payload.get("tok") if payload else None
+
+
+def _sign_in(response: Response, token: str) -> str:
+    """Trade an approved token for a session and attach the cookie. Raises
+    LastfmAuthError if the user never approved it."""
+    username, session_key = lastfm_auth.get_session(token)
+    user_id = db.upsert_user(username, session_key)
+    _set_session_cookie(response, user_id)
+    response.delete_cookie(session.PENDING_COOKIE_NAME, path="/")
+    return username
+
+
+def _set_session_cookie(response: Response, user_id: str) -> None:
+    response.set_cookie(
+        session.COOKIE_NAME,
+        session.sign({"uid": user_id}),
+        httponly=True,  # JS must never read it
+        samesite="lax",
+        secure=settings.cookie_secure,
+        max_age=session.DEFAULT_MAX_AGE,
+        path="/",
+    )
+
+
+@app.get("/me", response_model=Me)
+def me(
+    user_id: str | None = Depends(current_user_id),
+    token: str | None = Depends(pending_token),
+) -> Me:
+    if not user_id:
+        return Me(pending=bool(token))
+    user = db.get_user(user_id)  # cannot return the session key by construction
+    if user is None:
+        return Me(pending=bool(token))
+    return Me(lastfm_username=user["lastfm_username"], connected=True)
+
+
+@app.get("/auth/lastfm/start")
+def lastfm_start() -> RedirectResponse:
+    """Send the user to Last.fm to approve us, remembering the request token.
+
+    The token is kept in a short-lived signed cookie so the approval can be
+    completed on the user's return even if Last.fm never calls us back.
+    """
+    try:
+        token = lastfm_auth.get_token()
+    except lastfm_auth.LastfmAuthError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+    response = RedirectResponse(
+        lastfm_auth.auth_url(token, settings.lastfm_callback_url), status_code=307
+    )
+    response.set_cookie(
+        session.PENDING_COOKIE_NAME,
+        session.sign({"tok": token}),
+        httponly=True,
+        samesite="lax",
+        secure=settings.cookie_secure,
+        max_age=session.PENDING_MAX_AGE,
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/lastfm/callback")
+def lastfm_callback(
+    token: str | None = None, pending: str | None = Depends(pending_token)
+) -> RedirectResponse:
+    """Trade the approved token for a session and sign the user in.
+
+    Uses the token Last.fm hands back, falling back to the one we stashed at
+    the start of the flow — a user who returns by any route still lands signed in.
+    """
+    token = token or pending
+    if not token:
+        return RedirectResponse(f"{settings.web_url}/?lastfm=denied", status_code=303)
+
+    response = RedirectResponse(f"{settings.web_url}/?lastfm=connected", status_code=303)
+    try:
+        _sign_in(response, token)
+    except lastfm_auth.LastfmAuthError:
+        # Declined, expired, or replayed — never surface Last.fm's wording.
+        return RedirectResponse(f"{settings.web_url}/?lastfm=failed", status_code=303)
+    return response
+
+
+@app.post("/auth/lastfm/complete", response_model=Me)
+def lastfm_complete(response: Response, pending: str | None = Depends(pending_token)) -> Me:
+    """Finish a connection whose callback never arrived.
+
+    Last.fm only redirects back when the API account has a Callback URL
+    registered; without one it shows its own success page and leaves the user
+    to navigate back. The approved token is still redeemable, so this closes
+    the loop from the app side.
+    """
+    if not pending:
+        raise HTTPException(status_code=409, detail="no connection in progress")
+    try:
+        username = _sign_in(response, pending)
+    except lastfm_auth.LastfmAuthError as e:
+        # Drop the dead token so the page doesn't retry on every load. This has
+        # to be a returned Response, not a raised HTTPException: raising builds
+        # a fresh response and discards the cookie header set here.
+        failure = JSONResponse(
+            status_code=409, content={"detail": f"not approved on Last.fm yet: {e}"}
+        )
+        failure.delete_cookie(session.PENDING_COOKIE_NAME, path="/")
+        return failure
+    return Me(lastfm_username=username, connected=True)
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(response: Response) -> Response:
+    """Forget the browser. The stored Last.fm session key is left intact so
+    reconnecting doesn't need another round trip to Last.fm."""
+    response.delete_cookie(session.COOKIE_NAME, path="/")
+    response.status_code = 204
+    return response
 
 
 @app.get("/setlists", response_model=list[SetlistSummary])
@@ -98,90 +265,47 @@ def get_setlist(setlist_id: str) -> SetlistDetail:
     return SetlistDetail(setlist=setlist, **meta)
 
 
-@app.post("/setlists", response_model=AddSetlistResponse, status_code=201)
-def add_setlist(body: AddSetlistRequest, response: Response) -> AddSetlistResponse:
-    """Add a 1001TL URL. Returns instantly; the worker resolves in background.
+@app.get("/setlists/{setlist_id}/cues", response_model=WindowSet)
+def setlist_cues(
+    setlist_id: str,
+    duration: int | None = Query(None, ge=0, description="Recording length in seconds, when known"),
+) -> WindowSet:
+    """Cue windows: which track is playing when, and under what name.
 
-    Idempotent on source_url: re-adding a known URL returns its existing row
-    (and current status) instead of re-enqueuing.
+    The client reports the player's duration; everything else is derived here so
+    the highlight and the scrobbler can never disagree about what's playing.
     """
-    url = body.url.strip()
-    if not url:
-        raise HTTPException(status_code=422, detail="url is required")
-
-    existing = db.get_by_url(url)
-    if existing is not None:
-        setlist, meta = existing
-        response.status_code = 200
-        return AddSetlistResponse(id=setlist.id, status=meta["status"])
-
-    stub = Setlist(source_url=url, parser=ParserInfo(model="pending"), tracks=[])
-    db.upsert_content(stub, status="normalizing")
-    db.enqueue("process", stub.id)
-    return AddSetlistResponse(id=stub.id, status="normalizing")
-
-
-def _progress(setlist: Setlist, meta: dict) -> dict:
-    total = len(setlist.tracks)
-    done = sum(1 for t in setlist.tracks if t.resolution is not None)
-    return {
-        "status": meta["status"],
-        "coverage": meta["coverage"],
-        "resolved": done,
-        "total": total,
-    }
-
-
-@app.get("/setlists/{setlist_id}/events")
-async def setlist_events(setlist_id: str, request: Request) -> StreamingResponse:
-    """Server-Sent Events: poll the row ~1s and emit progress until it settles."""
-    if await asyncio.to_thread(db.get_by_id, setlist_id) is None:
-        raise HTTPException(status_code=404, detail="setlist not found")
-
-    async def gen():
-        last = None
-        for _ in range(_SSE_MAX_ITERS):
-            if await request.is_disconnected():
-                break
-            result = await asyncio.to_thread(db.get_by_id, setlist_id)
-            if result is None:
-                break
-            setlist, meta = result
-            payload = _progress(setlist, meta)
-            if payload != last:
-                yield f"data: {json.dumps(payload)}\n\n"
-                last = payload
-            if meta["status"] in ("resolved", "failed"):
-                break
-            await asyncio.sleep(1.0)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-def _within_days(iso: str | None, days: int) -> bool:
-    if not iso:
-        return False
-    try:
-        dt = datetime.fromisoformat(iso)
-    except ValueError:
-        return False
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - dt < timedelta(days=days)
-
-
-@app.post("/setlists/{setlist_id}/resolve", status_code=202)
-def reresolve_setlist(setlist_id: str) -> dict:
-    """Month-gated re-resolve: retry unmatched slots (newly-released tracks)."""
     result = db.get_by_id(setlist_id)
     if result is None:
         raise HTTPException(status_code=404, detail="setlist not found")
-    _setlist, meta = result
-    if _within_days(meta.get("resolved_at"), _RERESOLVE_GATE_DAYS):
-        raise HTTPException(
-            status_code=409,
-            detail=f"re-resolve is available {_RERESOLVE_GATE_DAYS} days after the last resolve",
-        )
-    db.set_status(setlist_id, "resolving")
-    db.enqueue("reresolve", setlist_id)
-    return {"id": setlist_id, "status": "resolving"}
+    setlist, _meta = result
+    return build_windows(setlist, media_duration_s=duration)
+
+
+@app.post("/setlists/{setlist_id}/export", response_model=ExportPreview)
+def export_preview(setlist_id: str, body: ExportPreviewRequest) -> ExportPreview:
+    """Dry-run preview: the ordered add-list + skip report for a target platform.
+
+    Network-free (uses exporter.collect.build_plan). Actual playlist creation
+    needs a connected account and lands with the export phase.
+    """
+    result = db.get_by_id(setlist_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="setlist not found")
+    setlist, _meta = result
+
+    from soundseek.exporter.collect import build_plan
+
+    plan = build_plan(
+        setlist,
+        body.target,
+        expand_mashups=body.expand_mashups,
+        skip_played_with=body.skip_played_with,
+    )
+    return ExportPreview(
+        target=plan.target,
+        added=plan.added,
+        total_considered=plan.total_considered,
+        items=[ExportPlanItem(id=i.id, label=i.label) for i in plan.items],
+        skipped=[ExportSkippedItem(label=label, reason=reason) for label, reason in plan.skipped],
+    )

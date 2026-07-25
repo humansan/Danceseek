@@ -141,9 +141,12 @@ def resolve(
     ref: str = typer.Argument(help="Setlist id or source URL"),
     force: bool = typer.Option(False, "--force", help="Re-resolve tracks that already have a resolution"),
     limit: int = typer.Option(None, "--limit", help="Debug: resolve only the first N unresolved tracks"),
+    lastfm_only: bool = typer.Option(
+        False, "--lastfm-only", help="Match against Last.fm only (faster; all scrobbling needs)"
+    ),
 ) -> None:
     """Resolve a stored setlist's tracks to Spotify / YouTube / Last.fm."""
-    from .resolver.resolve import resolve_setlist  # lazy: heavy imports
+    from .resolver.resolve import LASTFM_ONLY, resolve_setlist  # lazy: heavy imports
 
     try:
         setlist = store.load_by_url(ref) if ref.startswith("http") else store.load(ref)
@@ -153,7 +156,9 @@ def resolve(
         console.print(f"[red]No stored setlist for {ref} — ingest it first.[/red]")
         raise typer.Exit(1)
 
-    summary = resolve_setlist(setlist, force=force, limit=limit)
+    summary = resolve_setlist(
+        setlist, force=force, limit=limit, platforms=LASTFM_ONLY if lastfm_only else None
+    )
 
     for warning in summary.warnings:
         console.print(f"[yellow]warning: {warning}[/yellow]")
@@ -169,6 +174,83 @@ def resolve(
         f"  registry cache hits: {summary.registry_hits} | LLM batches: {summary.llm_batches}"
     )
     console.print(f"  file: {store.setlist_path(setlist.id)}")
+
+
+_LEVEL_STYLE = {"ok": "green", "warn": "yellow", "error": "red", "trace": "dim"}
+
+
+@app.command()
+def publish(
+    url: str = typer.Argument(help="1001tracklists tracklist URL"),
+    lastfm_only: bool = typer.Option(
+        False, "--lastfm-only", help="Match against Last.fm only (faster; all scrobbling needs)"
+    ),
+    force: bool = typer.Option(False, "--force", help="Re-fetch the page and re-run the pipeline"),
+    reresolve: bool = typer.Option(
+        False, "--reresolve", help="Retry only the unmatched/partial slots of an ingested set"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", help="Include tracebacks on failure"),
+) -> None:
+    """Ingest a set into the catalog: capture → normalize → resolve → Neon.
+
+    The CLI twin of the ingest console (`soundseek console`). Everything runs
+    on this machine: 1001tracklists needs a real browser with a Cloudflare-
+    cleared profile, and the server deliberately has neither that nor the LLM.
+    """
+    from . import ingest as runner  # lazy: pulls in the pipeline + db
+
+    job = runner.Job(
+        id="cli",
+        url=url,
+        platforms=runner.normalize_platforms(lastfm_only),
+        force=force,
+        mode="reresolve" if reresolve else "ingest",
+    )
+    console.print(f"[dim]platforms:[/dim] {', '.join(job.platforms)}")
+
+    seen = 0
+    thread = runner.start(job)
+    while thread.is_alive() or seen < len(job.events):
+        while seen < len(job.events):
+            event = job.events[seen]
+            seen += 1
+            if event["level"] == "trace" and not verbose:
+                continue  # full traceback only on --verbose
+            style = _LEVEL_STYLE.get(event["level"])
+            body = f"[{style}]{event['message']}[/{style}]" if style else event["message"]
+            console.print(f"  {body}")
+        thread.join(timeout=0.2)
+
+    if job.status == "failed":
+        raise typer.Exit(1)
+    if job.setlist_id:
+        console.print(f"  id: {job.setlist_id}")
+
+
+@app.command(name="console")
+def console_ui(
+    port: int = typer.Option(8020, "--port", help="Port for the local ingest console"),
+) -> None:
+    """Open the local ingest console (URL box + Last.fm-only toggle + live log)."""
+    import sys
+
+    import uvicorn
+
+    from .config import PROJECT_ROOT
+
+    # The console lives in apps/ (it serves static files from the repo), which
+    # isn't an installed package — put the repo root on the path to import it.
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    try:
+        from apps.ingest.main import app as ingest_app
+    except ModuleNotFoundError as e:
+        console.print(f"[red]Ingest console not found under {PROJECT_ROOT}/apps: {e}[/red]")
+        console.print("[dim]Run this from a checkout of the repo.[/dim]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]Ingest console:[/bold cyan] http://127.0.0.1:{port}")
+    uvicorn.run(ingest_app, host="127.0.0.1", port=port, log_level="warning")
 
 
 @app.command()

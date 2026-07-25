@@ -419,6 +419,135 @@ def fail_job(job_id: int, error: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Users (Last.fm identity). The session key is a permanent write credential:
+# it authorizes scrobbling on that account forever and must never reach a
+# browser. `get_user` therefore cannot return it — only `session_key_for` can,
+# and that exists solely for the server-side scrobbler.
+# ---------------------------------------------------------------------------
+
+
+def upsert_user(lastfm_username: str, session_key: str) -> str:
+    """Record a connected Last.fm account; returns the user id."""
+    import uuid
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users (id, lastfm_username, lastfm_session_key)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (lastfm_username) DO UPDATE SET
+                    lastfm_session_key = EXCLUDED.lastfm_session_key
+                RETURNING id
+                """,
+                (str(uuid.uuid4()), lastfm_username, session_key),
+            )
+            user_id = cur.fetchone()[0]
+        conn.commit()
+        return str(user_id)
+    finally:
+        conn.close()
+
+
+def get_user(user_id: str) -> dict[str, Any] | None:
+    """Public-safe user record. Never includes the Last.fm session key."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, lastfm_username, created_at FROM users WHERE id = %s", (user_id,)
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row[0]),
+            "lastfm_username": row[1],
+            "created_at": str(row[2]) if row[2] else None,
+        }
+    finally:
+        conn.close()
+
+
+def session_key_for(user_id: str) -> str | None:
+    """The Last.fm session key, for signing scrobbles server-side. Never serve this."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT lastfm_session_key FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Captured source pages (raw_pages) — the maintainer scrapes on their own
+# machine and uploads the HTML here; the server reads it back instead of
+# running a browser. Stored gzipped: pages are ~1-2MB of repetitive markup.
+# ---------------------------------------------------------------------------
+
+
+def put_page(url: str, html: str) -> int:
+    """Store (or replace) the captured HTML for a URL. Returns compressed size."""
+    import gzip
+
+    from .fetcher import url_digest
+
+    blob = gzip.compress(html.encode("utf-8"))
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO raw_pages (url_digest, url, html, byte_size, fetched_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (url_digest) DO UPDATE SET
+                    url = EXCLUDED.url, html = EXCLUDED.html,
+                    byte_size = EXCLUDED.byte_size, fetched_at = now()
+                """,
+                (url_digest(url), url, blob, len(blob)),
+            )
+        conn.commit()
+        return len(blob)
+    finally:
+        conn.close()
+
+
+def get_page(url: str) -> str | None:
+    """Read back captured HTML for a URL, or None if it was never captured."""
+    import gzip
+
+    from .fetcher import url_digest
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT html FROM raw_pages WHERE url_digest = %s", (url_digest(url),))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return gzip.decompress(bytes(row[0])).decode("utf-8")
+    finally:
+        conn.close()
+
+
+def list_pages() -> list[dict[str, Any]]:
+    """Captured pages, newest first (maintainer visibility)."""
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT url, byte_size, fetched_at FROM raw_pages ORDER BY fetched_at DESC"
+            )
+            rows = cur.fetchall()
+        return [{"url": r[0], "byte_size": r[1], "fetched_at": str(r[2])} for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Track registry (tracks table) — the server-side backing store for the
 # cross-set cache. See registry_pg.PgRegistry, which owns the dedupe logic.
 # ---------------------------------------------------------------------------

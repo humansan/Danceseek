@@ -1,88 +1,56 @@
-// Thin typed client for the Danceseek API. (Phase 2 will generate this from
-// the OpenAPI schema; hand-written for the vertical slice.)
+// Web-facing API adapter: binds the generated @danceseek/api-client to the
+// configured API base URL. Types come from the FastAPI OpenAPI schema; regen
+// with `npm run generate` in packages/api-client after changing endpoints.
+
+import {
+  exportPreview as _exportPreview,
+  getCues as _cues,
+  getSetlist as _get,
+  listSetlists as _list,
+  type Coverage,
+  type CueWindow,
+  type WindowSet,
+  type ExportPreview,
+  type PlatformMatch,
+  type Resolution,
+  type Setlist,
+  type SetlistDetail,
+  type SetlistSummary,
+  type SetlistTrack,
+} from "@danceseek/api-client";
 
 const API_URL = process.env.API_URL ?? "http://127.0.0.1:8010";
 
-export interface Coverage {
-  resolved?: number;
-  partial?: number;
-  no_match?: number;
-  unreleased?: number;
-  [k: string]: number | undefined;
+export type {
+  Coverage,
+  CueWindow,
+  WindowSet,
+  ExportPreview,
+  PlatformMatch,
+  Resolution,
+  Setlist,
+  SetlistDetail,
+  SetlistSummary,
+};
+// Historical alias used by the setlist page (schema name is SetlistTrack).
+export type Track = SetlistTrack;
+
+export function listSetlists(): Promise<SetlistSummary[]> {
+  return _list(API_URL);
 }
 
-export interface SetlistSummary {
-  id: string;
-  title: string | null;
-  dj_names: string[];
-  event: string | null;
-  date_recorded: string | null;
-  genres: string[];
-  media_url: string | null;
-  track_count: number;
-  status: string;
-  coverage: Coverage | null;
-  created_at: string | null;
+export function getSetlist(id: string): Promise<SetlistDetail | null> {
+  return _get(API_URL, id);
 }
 
-export interface PlatformMatch {
-  id: string;
-  title: string;
-  artists: string[];
-  url: string;
+// Adding a set is a maintainer action done in the local ingest console
+// (`uv run soundseek console`), not from the web app — the API has no
+// ingest route. The command bar is search-only.
+
+export function exportPreview(id: string, target: "spotify" | "youtube"): Promise<ExportPreview> {
+  return _exportPreview(API_URL, id, target);
 }
 
-export interface Resolution {
-  status: string;
-  spotify: PlatformMatch | null;
-  youtube: PlatformMatch | null;
-  lastfm: { artist: string; track: string } | null;
-  confidence: number;
-}
-
-export interface Track {
-  position: number;
-  source_track_number: number | null;
-  cue_time: string | null;
-  raw_text: string;
-  artists: string[];
-  title: string | null;
-  remix: string | null;
-  is_id: boolean;
-  played_with: number | null;
-  mashup_components: { artists: string[]; title: string | null }[];
-  resolution: Resolution | null;
-}
-
-export interface Setlist {
-  id: string;
-  title: string | null;
-  dj_names: string[];
-  event: string | null;
-  date_recorded: string | null;
-  genres: string[];
-  media_url: string | null;
-  media_kind: string | null;
-  tracks: Track[];
-}
-
-export interface SetlistDetail {
-  setlist: Setlist;
-  status: string;
-  coverage: Coverage | null;
-  resolved_at: string | null;
-  created_at: string | null;
-}
-
-export async function listSetlists(): Promise<SetlistSummary[]> {
-  const res = await fetch(`${API_URL}/setlists`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`GET /setlists ${res.status}`);
-  return res.json();
-}
-
-export async function getSetlist(id: string): Promise<SetlistDetail | null> {
-  const res = await fetch(`${API_URL}/setlists/${id}`, { cache: "no-store" });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GET /setlists/${id} ${res.status}`);
-  return res.json();
+export function getCues(id: string, duration?: number): Promise<WindowSet | null> {
+  return _cues(API_URL, id, duration);
 }

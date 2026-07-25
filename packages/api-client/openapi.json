@@ -1,0 +1,1432 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Danceseek API",
+    "version": "0.3.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "summary": "Me",
+        "operationId": "me_me_get",
+        "parameters": [
+          {
+            "name": "ds_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Session"
+            }
+          },
+          {
+            "name": "ds_pending",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Pending"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/lastfm/start": {
+      "get": {
+        "summary": "Lastfm Start",
+        "description": "Send the user to Last.fm to approve us, remembering the request token.\n\nThe token is kept in a short-lived signed cookie so the approval can be\ncompleted on the user's return even if Last.fm never calls us back.",
+        "operationId": "lastfm_start_auth_lastfm_start_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/lastfm/callback": {
+      "get": {
+        "summary": "Lastfm Callback",
+        "description": "Trade the approved token for a session and sign the user in.\n\nUses the token Last.fm hands back, falling back to the one we stashed at\nthe start of the flow — a user who returns by any route still lands signed in.",
+        "operationId": "lastfm_callback_auth_lastfm_callback_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Token"
+            }
+          },
+          {
+            "name": "ds_pending",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Pending"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/lastfm/complete": {
+      "post": {
+        "summary": "Lastfm Complete",
+        "description": "Finish a connection whose callback never arrived.\n\nLast.fm only redirects back when the API account has a Callback URL\nregistered; without one it shows its own success page and leaves the user\nto navigate back. The approved token is still redeemable, so this closes\nthe loop from the app side.",
+        "operationId": "lastfm_complete_auth_lastfm_complete_post",
+        "parameters": [
+          {
+            "name": "ds_pending",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Pending"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "Logout",
+        "description": "Forget the browser. The stored Last.fm session key is left intact so\nreconnecting doesn't need another round trip to Last.fm.",
+        "operationId": "logout_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/setlists": {
+      "get": {
+        "summary": "List Setlists",
+        "operationId": "list_setlists_setlists_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "dj",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dj"
+            }
+          },
+          {
+            "name": "genre",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Genre"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SetlistSummary"
+                  },
+                  "title": "Response List Setlists Setlists Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/setlists/{setlist_id}": {
+      "get": {
+        "summary": "Get Setlist",
+        "operationId": "get_setlist_setlists__setlist_id__get",
+        "parameters": [
+          {
+            "name": "setlist_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Setlist Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetlistDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/setlists/{setlist_id}/cues": {
+      "get": {
+        "summary": "Setlist Cues",
+        "description": "Cue windows: which track is playing when, and under what name.\n\nThe client reports the player's duration; everything else is derived here so\nthe highlight and the scrobbler can never disagree about what's playing.",
+        "operationId": "setlist_cues_setlists__setlist_id__cues_get",
+        "parameters": [
+          {
+            "name": "setlist_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Setlist Id"
+            }
+          },
+          {
+            "name": "duration",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Recording length in seconds, when known",
+              "title": "Duration"
+            },
+            "description": "Recording length in seconds, when known"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WindowSet"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/setlists/{setlist_id}/export": {
+      "post": {
+        "summary": "Export Preview",
+        "description": "Dry-run preview: the ordered add-list + skip report for a target platform.\n\nNetwork-free (uses exporter.collect.build_plan). Actual playlist creation\nneeds a connected account and lands with the export phase.",
+        "operationId": "export_preview_setlists__setlist_id__export_post",
+        "parameters": [
+          {
+            "name": "setlist_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Setlist Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CueWindow": {
+        "properties": {
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "component_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Component Index"
+          },
+          "start_s": {
+            "type": "integer",
+            "title": "Start S"
+          },
+          "end_s": {
+            "type": "integer",
+            "title": "End S"
+          },
+          "timing": {
+            "type": "string",
+            "enum": [
+              "cue",
+              "estimated"
+            ],
+            "title": "Timing"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "scrobble_artist": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scrobble Artist"
+          },
+          "scrobble_track": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scrobble Track"
+          },
+          "canonical": {
+            "type": "boolean",
+            "title": "Canonical",
+            "default": false
+          },
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible",
+            "default": true
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "position",
+          "start_s",
+          "end_s",
+          "timing",
+          "label"
+        ],
+        "title": "CueWindow",
+        "description": "One track's slice of the recording, plus how to name it."
+      },
+      "ExportPlanItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "ExportPlanItem"
+      },
+      "ExportPreview": {
+        "properties": {
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "added": {
+            "type": "integer",
+            "title": "Added"
+          },
+          "total_considered": {
+            "type": "integer",
+            "title": "Total Considered"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExportPlanItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/ExportSkippedItem"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target",
+          "added",
+          "total_considered",
+          "items",
+          "skipped"
+        ],
+        "title": "ExportPreview",
+        "description": "Dry-run export plan: what would be added / skipped, per target platform."
+      },
+      "ExportPreviewRequest": {
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": [
+              "spotify",
+              "youtube"
+            ],
+            "title": "Target"
+          },
+          "expand_mashups": {
+            "type": "boolean",
+            "title": "Expand Mashups",
+            "default": true
+          },
+          "skip_played_with": {
+            "type": "boolean",
+            "title": "Skip Played With",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "title": "ExportPreviewRequest"
+      },
+      "ExportSkippedItem": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "reason"
+        ],
+        "title": "ExportSkippedItem"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LastfmMatch": {
+        "properties": {
+          "artist": {
+            "type": "string",
+            "title": "Artist"
+          },
+          "track": {
+            "type": "string",
+            "title": "Track"
+          },
+          "mbid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mbid"
+          },
+          "listeners": {
+            "type": "integer",
+            "title": "Listeners",
+            "default": 0
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "artist",
+          "track"
+        ],
+        "title": "LastfmMatch",
+        "description": "The canonical Last.fm identity — these exact strings are the future\nscrobble payload (Last.fm's highest-scrobbled entry, typically 1 artist)."
+      },
+      "MashupComponent": {
+        "properties": {
+          "artists": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Artists"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "remix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remix"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Resolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "MashupComponent",
+        "description": "One component track of a mashup."
+      },
+      "Me": {
+        "properties": {
+          "lastfm_username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastfm Username"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected",
+            "default": false
+          },
+          "pending": {
+            "type": "boolean",
+            "title": "Pending",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "Me"
+      },
+      "ParserInfo": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "schema_version": {
+            "type": "integer",
+            "title": "Schema Version",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "title": "ParserInfo"
+      },
+      "PlatformMatch": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "artists": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Artists"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "url"
+        ],
+        "title": "PlatformMatch",
+        "description": "One accepted Spotify track / YouTube video match."
+      },
+      "Resolution": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "partial",
+              "no_match",
+              "unreleased"
+            ],
+            "title": "Status"
+          },
+          "track_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Id"
+          },
+          "spotify": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlatformMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "youtube": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlatformMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastfm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LastfmMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "default": 0.0
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "batch_llm",
+              "registry",
+              "skip",
+              "cascade",
+              "agent"
+            ],
+            "title": "Method",
+            "default": "batch_llm"
+          },
+          "resolved_at": {
+            "type": "string",
+            "title": "Resolved At"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "Resolution",
+        "description": "Outcome of resolving one track/component against the platforms.\n\nPrecision over recall: a platform field is populated ONLY when the match\ncleared the confidence threshold. Empty fields on bootlegs/edits are the\ncorrect outcome, not a failure (\"no_match\"). A null Resolution slot on a\ntrack means resolution was never attempted."
+      },
+      "Setlist": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "1001tracklists"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "dj_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dj Names"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "date_recorded": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Recorded"
+          },
+          "genres": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Genres"
+          },
+          "media_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Url"
+          },
+          "media_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Kind"
+          },
+          "scraped_at": {
+            "type": "string",
+            "title": "Scraped At"
+          },
+          "parser": {
+            "$ref": "#/components/schemas/ParserInfo"
+          },
+          "tracks": {
+            "items": {
+              "$ref": "#/components/schemas/SetlistTrack"
+            },
+            "type": "array",
+            "title": "Tracks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_url",
+          "parser"
+        ],
+        "title": "Setlist",
+        "description": "The persisted setlist record (future `Setlists` + `Setlist_Tracks` rows)."
+      },
+      "SetlistDetail": {
+        "properties": {
+          "setlist": {
+            "$ref": "#/components/schemas/Setlist"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "setlist",
+          "status",
+          "coverage",
+          "resolved_at",
+          "created_at"
+        ],
+        "title": "SetlistDetail",
+        "description": "Full setlist plus its resolution lifecycle metadata."
+      },
+      "SetlistSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "dj_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dj Names"
+          },
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "date_recorded": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Recorded"
+          },
+          "genres": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Genres"
+          },
+          "media_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Url"
+          },
+          "track_count": {
+            "type": "integer",
+            "title": "Track Count"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "coverage": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "dj_names",
+          "event",
+          "date_recorded",
+          "genres",
+          "media_url",
+          "track_count",
+          "status",
+          "coverage",
+          "created_at"
+        ],
+        "title": "SetlistSummary",
+        "description": "Lightweight browse-card row."
+      },
+      "SetlistTrack": {
+        "properties": {
+          "position": {
+            "type": "integer",
+            "title": "Position",
+            "description": "Track position, echoed from the input row"
+          },
+          "raw_text": {
+            "type": "string",
+            "title": "Raw Text",
+            "description": "The input raw_text echoed back VERBATIM"
+          },
+          "artists": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Artists",
+            "description": "Artist names split out (e.g. 'A & B' -> ['A', 'B']). Empty for ID tracks."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title",
+            "description": "Track title without remix/version suffix. None for ID tracks."
+          },
+          "remix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remix",
+            "description": "Remix/version/edit descriptor, e.g. 'Extended Mix', 'Fred again.. Remix'"
+          },
+          "is_id": {
+            "type": "boolean",
+            "title": "Is Id",
+            "description": "True if the track is unreleased/unidentified ('ID - ID' or artist ID)",
+            "default": false
+          },
+          "played_with": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Played With",
+            "description": "Position of the track this row is layered over ('w/' rows), else null"
+          },
+          "mashup_components": {
+            "items": {
+              "$ref": "#/components/schemas/MashupComponent"
+            },
+            "type": "array",
+            "title": "Mashup Components",
+            "description": "For mashups ('A vs. B'), the component tracks; empty otherwise"
+          },
+          "source_track_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Track Number"
+          },
+          "cue_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cue Time"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Resolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "position",
+          "raw_text"
+        ],
+        "title": "SetlistTrack",
+        "description": "A parsed track plus scrape context and the (future) resolution slot."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "WindowSet": {
+        "properties": {
+          "setlist_id": {
+            "type": "string",
+            "title": "Setlist Id"
+          },
+          "timing": {
+            "type": "string",
+            "enum": [
+              "cue",
+              "estimated"
+            ],
+            "title": "Timing"
+          },
+          "live_capable": {
+            "type": "boolean",
+            "title": "Live Capable"
+          },
+          "duration_s": {
+            "type": "integer",
+            "title": "Duration S"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/CueWindow"
+            },
+            "type": "array",
+            "title": "Windows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "setlist_id",
+          "timing",
+          "live_capable",
+          "duration_s",
+          "windows"
+        ],
+        "title": "WindowSet",
+        "description": "Every window for a setlist, plus what the caller may do with them."
+      }
+    }
+  }
+}

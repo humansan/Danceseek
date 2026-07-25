@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SoundSeek · ingest console</title>
+<style>
+  :root {
+    --bg:#0a0a0b; --surface:#121214; --surface-2:#1a1a1d; --border:#2a2a2e;
+    --fg:#e6e6e6; --dim:#8a8a90; --ok:#4ec97a; --warn:#e3c04b; --link:#4fb8d6;
+    --flag:#c07bd6; --accent:#3dd0c4; --err:#e35b5b;
+    --mono: ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; border-radius:0; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg); font-family:var(--mono);
+    font-size:13px; line-height:1.5;
+  }
+  .wrap { max-width:1000px; margin:0 auto; padding:24px 20px 60px; }
+  header { border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:20px; }
+  h1 { font-size:14px; margin:0; font-weight:600; letter-spacing:.02em; }
+  h1 .dim { color:var(--dim); font-weight:400; }
+  .sub { color:var(--dim); font-size:11px; margin-top:4px; }
+  h2 { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.08em;
+       margin:24px 0 8px; font-weight:500; }
+
+  form { background:var(--surface); border:1px solid var(--border); padding:14px; }
+  label.field { display:block; font-size:11px; color:var(--dim); margin-bottom:5px; }
+  input[type=url] {
+    width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--border);
+    padding:9px 10px; font-family:var(--mono); font-size:13px;
+  }
+  input[type=url]:focus { outline:none; border-color:var(--accent); }
+  .opts { display:flex; flex-wrap:wrap; gap:18px; margin:12px 0 14px; }
+  .opt { display:flex; gap:7px; align-items:flex-start; cursor:pointer; }
+  .opt input { margin:3px 0 0; accent-color:var(--accent); cursor:pointer; }
+  .opt span { font-size:12px; }
+  .opt .hint { display:block; color:var(--dim); font-size:11px; }
+  .actions { display:flex; gap:8px; align-items:center; }
+  button {
+    background:var(--accent); color:#000; border:1px solid var(--accent);
+    padding:8px 16px; font-family:var(--mono); font-size:12px; font-weight:600; cursor:pointer;
+  }
+  button.secondary { background:transparent; color:var(--dim); border-color:var(--border); font-weight:400; }
+  button.secondary:hover:not(:disabled) { color:var(--fg); border-color:var(--dim); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .err { color:var(--err); font-size:12px; margin-left:4px; }
+
+  .status { display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+            border:1px solid var(--border); border-bottom:none; background:var(--surface);
+            padding:8px 12px; font-size:12px; }
+  .badge { padding:1px 7px; border:1px solid currentColor; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  .badge.running { color:var(--accent); }
+  .badge.done { color:var(--ok); }
+  .badge.failed { color:var(--err); }
+  .badge.idle { color:var(--dim); }
+  .bar { flex:1; min-width:120px; height:3px; background:var(--surface-2); }
+  .bar > i { display:block; height:100%; background:var(--accent); width:0; transition:width .3s; }
+
+  .log { background:#050506; border:1px solid var(--border); height:320px; overflow-y:auto;
+         padding:10px 12px; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .log .ts { color:#4a4a50; margin-right:8px; }
+  .log .info { color:var(--fg); }
+  .log .ok { color:var(--ok); }
+  .log .warn { color:var(--warn); }
+  .log .error { color:var(--err); }
+  .log .trace { color:#5a5a60; font-size:11px; }
+  .log .empty { color:var(--dim); }
+
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th { text-align:left; color:var(--dim); font-weight:400; font-size:11px;
+       border-bottom:1px solid var(--border); padding:5px 8px; }
+  td { padding:5px 8px; border-bottom:1px solid var(--surface-2); }
+  tr.clickable { cursor:pointer; }
+  tr.clickable:hover td { background:var(--surface); }
+  .trunc { max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* Results table — the `soundseek show` view, in the browser. */
+  .resultHead { display:flex; justify-content:space-between; align-items:baseline;
+                gap:12px; padding:0 2px 6px; font-size:12px; }
+  .tableScroll { border:1px solid var(--border); overflow-x:auto; }
+  table.tracks { font-size:12px; }
+  table.tracks th { background:var(--surface); padding:6px 8px; white-space:nowrap;
+                    position:sticky; top:0; }
+  table.tracks td { padding:4px 8px; vertical-align:top; border-bottom:1px solid var(--surface-2); }
+  table.tracks tr:hover td { background:var(--surface); }
+  table.tracks .num { text-align:right; color:var(--dim); width:1%; white-space:nowrap; }
+  table.tracks .cue { color:var(--dim); white-space:nowrap; }
+  table.tracks .remix { color:var(--link); }
+  table.tracks .flags { color:var(--flag); white-space:nowrap; }
+  table.tracks .res { white-space:nowrap; }
+  table.tracks .res .letters { color:var(--ok); }
+  table.tracks .res .conf { color:var(--dim); }
+  table.tracks .res .none { color:var(--dim); }
+  table.tracks .res .unrel { color:var(--warn); }
+  table.tracks .id { color:var(--flag); }
+  table.tracks tr.layered td:first-child { padding-left:16px; }
+  table.tracks tr.component td { color:var(--dim); font-size:11px; }
+  table.tracks tr.component td:nth-child(4) { padding-left:20px; }
+  .pill { font-size:10px; border:1px solid currentColor; padding:0 4px; margin-right:3px; }
+  .p-lastfm { color:var(--link); } .p-spotify { color:var(--ok); } .p-youtube { color:var(--warn); }
+  .muted { color:var(--dim); }
+  a { color:var(--link); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>soundseek <span class="dim">/ ingest console</span></h1>
+    <div class="sub">
+      Local maintainer tool — browser, LLM and platform searches all run here, then write to Neon.
+      The public API only reads the results.
+    </div>
+  </header>
+
+  <form id="form">
+    <label class="field" for="url">1001tracklists URL</label>
+    <input id="url" type="url" autocomplete="off" spellcheck="false"
+           placeholder="https://www.1001tracklists.com/tracklist/…/….html" required />
+
+    <div class="opts">
+      <label class="opt">
+        <input type="checkbox" id="lastfm_only" checked />
+        <span>Last.fm only
+          <span class="hint">Skips Spotify + YouTube matching. Faster and cheaper; enough for scrobbling.</span>
+        </span>
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="force" />
+        <span>Force
+          <span class="hint">Re-fetch the page and re-run a set that's already ingested.</span>
+        </span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button type="submit" id="go">ingest</button>
+      <button type="button" class="secondary" id="rerun"
+              title="Retry only the unmatched/partial slots of a set already in the catalog">re-resolve</button>
+      <span class="err" id="formError"></span>
+    </div>
+  </form>
+
+  <h2>Run</h2>
+  <div class="status">
+    <span class="badge idle" id="badge">idle</span>
+    <span id="statusText" class="muted">No run yet.</span>
+    <span class="bar"><i id="bar"></i></span>
+    <span id="counter" class="muted"></span>
+  </div>
+  <div class="log" id="log"><span class="empty">Paste a tracklist URL above to begin.</span></div>
+
+  <div id="resultWrap" hidden>
+    <h2>Result</h2>
+    <div class="resultHead">
+      <span id="resultTitle"></span>
+      <span id="resultCoverage" class="muted"></span>
+    </div>
+    <div class="tableScroll">
+      <table class="tracks">
+        <thead><tr>
+          <th class="num">#</th><th class="num">row</th><th>cue</th><th>artists</th>
+          <th>title</th><th>remix</th><th>flags</th><th>res</th>
+        </tr></thead>
+        <tbody id="tracks"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <h2>Recent runs</h2>
+  <table>
+    <thead><tr><th>when</th><th>set</th><th>platforms</th><th>status</th></tr></thead>
+    <tbody id="jobs"><tr><td colspan="4" class="muted">none yet</td></tr></tbody>
+  </table>
+
+  <h2>Catalog</h2>
+  <table>
+    <thead><tr><th>title</th><th>tracks</th><th>coverage</th><th>status</th></tr></thead>
+    <tbody id="catalog"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+let stream = null;
+
+const time = (iso) => (iso || "").slice(11, 19);
+
+function clearLog() { logEl.innerHTML = ""; }
+
+function appendLog(ev) {
+  const line = document.createElement("div");
+  line.innerHTML = `<span class="ts">${time(ev.ts)}</span><span class="${ev.level}"></span>`;
+  line.lastChild.textContent = ev.message;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setStatus(job) {
+  const running = !["done", "failed"].includes(job.status);
+  const kind = job.status === "done" ? "done" : job.status === "failed" ? "failed" : "running";
+  $("badge").className = `badge ${kind}`;
+  $("badge").textContent = job.status;
+  $("statusText").textContent = job.title || job.url;
+  $("statusText").className = "";
+
+  if (job.total) {
+    $("bar").style.width = `${Math.round((job.done / job.total) * 100)}%`;
+    $("counter").textContent = `${job.done}/${job.total}`;
+  } else if (!running) {
+    $("bar").style.width = job.status === "done" ? "100%" : "0";
+    $("counter").textContent = "";
+  }
+  $("go").disabled = running;
+  $("rerun").disabled = running;
+  if (!running) {
+    loadJobs();
+    loadCatalog();
+    showResult(job.setlist_id);
+  }
+}
+
+function follow(jobId) {
+  if (stream) stream.close();
+  stream = new EventSource(`/api/jobs/${jobId}/events`);
+  stream.addEventListener("log", (e) => appendLog(JSON.parse(e.data)));
+  stream.addEventListener("status", (e) => setStatus(JSON.parse(e.data)));
+  stream.onerror = () => { stream.close(); stream = null; $("go").disabled = false; $("rerun").disabled = false; };
+}
+
+async function submit(mode) {
+  $("formError").textContent = "";
+  const url = $("url").value.trim();
+  if (!url) return;
+  $("go").disabled = $("rerun").disabled = true;
+  try {
+    const r = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url, mode,
+        lastfm_only: $("lastfm_only").checked,
+        force: $("force").checked,
+      }),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+    clearLog();
+    $("resultWrap").hidden = true;
+    setStatus(body);
+    follow(body.id);
+  } catch (e) {
+    $("formError").textContent = String(e.message || e).split("\n")[0];
+    $("go").disabled = $("rerun").disabled = false;
+  }
+}
+
+$("form").addEventListener("submit", (e) => { e.preventDefault(); submit("ingest"); });
+$("rerun").addEventListener("click", () => submit("reresolve"));
+
+function platformPills(list) {
+  return (list || []).map((p) => `<span class="pill p-${p}">${p}</span>`).join("");
+}
+
+// --- results table (the `soundseek show` view) -------------------------------
+
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/** Mirrors cli._res_cell: platform letters + confidence, or a status word. */
+function resCell(res) {
+  if (!res) return "";
+  if (res.status === "unreleased") return '<span class="unrel">unrel</span>';
+  if (res.status === "no_match") return '<span class="none">—</span>';
+  const letters = [["S", res.spotify], ["Y", res.youtube], ["L", res.lastfm]]
+    .filter(([, m]) => m).map(([l]) => l).join("");
+  if (!letters) return '<span class="none">—</span>';
+  return `<span class="letters">${letters}</span> <span class="conf">${(res.confidence ?? 0).toFixed(2)}</span>`;
+}
+
+function trackFlags(t) {
+  const flags = [];
+  if (t.is_id) flags.push("ID");
+  if (t.played_with != null) flags.push(t.played_with >= 0 ? `w/ #${t.played_with}` : "w/");
+  if (t.mashup_components?.length) flags.push("mashup");
+  return flags.join(" ");
+}
+
+function renderTracks(setlist, coverage) {
+  const tbody = $("tracks");
+  tbody.innerHTML = "";
+  for (const t of setlist.tracks || []) {
+    const layered = t.played_with != null;
+    const title = t.title || (t.is_id ? '<span class="id">?</span>' : esc(t.raw_text));
+    const tr = document.createElement("tr");
+    if (layered) tr.className = "layered";
+    tr.innerHTML =
+      `<td class="num">${t.source_track_number ?? (layered ? "w/" : "")}</td>` +
+      `<td class="num">${t.position}</td>` +
+      `<td class="cue">${esc(t.cue_time || "")}</td>` +
+      `<td>${esc((t.artists || []).join(", "))}</td>` +
+      `<td>${t.title ? esc(t.title) : title}</td>` +
+      `<td class="remix">${esc(t.remix || "")}</td>` +
+      `<td class="flags">${esc(trackFlags(t))}</td>` +
+      `<td class="res">${resCell(t.resolution)}</td>`;
+    tbody.appendChild(tr);
+
+    // Mashup components resolve individually — that's what gets scrobbled.
+    for (const c of t.mashup_components || []) {
+      const sub = document.createElement("tr");
+      sub.className = "component";
+      sub.innerHTML =
+        `<td colspan="3"></td>` +
+        `<td>↳ ${esc((c.artists || []).join(", "))}</td>` +
+        `<td>${esc(c.title || "")}</td>` +
+        `<td class="remix">${esc(c.remix || "")}</td>` +
+        `<td></td><td class="res">${resCell(c.resolution)}</td>`;
+      tbody.appendChild(sub);
+    }
+  }
+
+  $("resultTitle").textContent = setlist.title || setlist.source_url;
+  const c = coverage || {};
+  $("resultCoverage").textContent = c.total
+    ? `${c.resolved ?? 0} resolved · ${c.partial ?? 0} partial · ${c.no_match ?? 0} no match` +
+      ` · ${c.unreleased ?? 0} unreleased  [${(c.platforms || []).join(", ")}]`
+    : `${(setlist.tracks || []).length} tracks`;
+  $("resultWrap").hidden = false;
+}
+
+async function showResult(setlistId) {
+  if (!setlistId) { $("resultWrap").hidden = true; return; }
+  try {
+    const r = await fetch(`/api/setlists/${setlistId}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    renderTracks(data.setlist, data.coverage);
+  } catch { /* the run already reported anything that matters */ }
+}
+
+async function loadJobs() {
+  const jobs = await (await fetch("/api/jobs")).json();
+  const tbody = $("jobs");
+  if (!jobs.length) { tbody.innerHTML = '<tr><td colspan="4" class="muted">none yet</td></tr>'; return; }
+  tbody.innerHTML = "";
+  for (const j of jobs) {
+    const tr = document.createElement("tr");
+    tr.className = "clickable";
+    tr.innerHTML = `<td class="muted">${time(j.created_at)}</td>
+      <td class="trunc">${j.title || j.url}</td>
+      <td>${platformPills(j.platforms)}</td>
+      <td class="${j.status === "failed" ? "err" : ""}">${j.status}</td>`;
+    tr.onclick = async () => {
+      const full = await (await fetch(`/api/jobs/${j.id}`)).json();
+      clearLog();
+      full.events.forEach(appendLog);
+      setStatus(full);
+      if (!["done", "failed"].includes(full.status)) follow(j.id);
+    };
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadCatalog() {
+  const sets = await (await fetch("/api/setlists")).json();
+  const tbody = $("catalog");
+  if (!sets.length) { tbody.innerHTML = '<tr><td colspan="4" class="muted">empty</td></tr>'; return; }
+  tbody.innerHTML = "";
+  for (const s of sets) {
+    const c = s.coverage || {};
+    const cov = c.total
+      ? `${c.resolved ?? 0}/${c.total} ${platformPills(c.platforms)}`
+      : '<span class="muted">—</span>';
+    const tr = document.createElement("tr");
+    tr.className = "clickable";
+    tr.innerHTML = `<td class="trunc">${esc(s.title || s.id)}</td>
+      <td>${s.track_count}</td><td>${cov}</td>
+      <td class="${s.status === "resolved" ? "" : "muted"}">${s.status}</td>`;
+    tr.onclick = () => showResult(s.id);  // inspect anything already in the catalog
+    tbody.appendChild(tr);
+  }
+}
+
+loadJobs();
+loadCatalog();
+</script>
+</body>
+</html>

@@ -26,7 +26,12 @@ class Settings(BaseSettings):
     data_dir: Path = PROJECT_ROOT / "data"
     store_backend: str = "json"  # "json" (local/CLI) or "postgres" (Neon)
 
-    # Scraping politeness
+    # Scraping
+    # backend: "local"   -> drive a real browser here (maintainer machine / dev)
+    #          "stored"  -> read pages captured earlier into Postgres (server/worker;
+    #                       never launches a browser, so the deploy needs no Playwright)
+    #          "managed" -> third-party browser API (not implemented yet)
+    fetch_backend: str = "local"
     fetch_delay_seconds: float = 2.0
     fetch_timeout_seconds: float = 60.0
     headless: bool = True
@@ -40,6 +45,11 @@ class Settings(BaseSettings):
     resolve_batch_size: int = 20  # units per LLM pick call
     resolve_candidates_per_platform: int = 5
     resolve_api_delay_seconds: float = 0.3  # politeness between API calls
+
+    # Web app / auth. The browser always talks to the web origin (Next rewrites
+    # /api/* to the API), so the session cookie is same-origin in dev and prod.
+    web_url: str = "http://localhost:3000"
+    lastfm_callback_path: str = "/api/auth/lastfm/callback"
 
     # Export (Step 4) — OAuth loopback
     export_redirect_port: int = 8888
@@ -77,6 +87,16 @@ class Settings(BaseSettings):
     @property
     def auth_dir(self) -> Path:
         return self.data_dir / "auth"
+
+    @property
+    def lastfm_callback_url(self) -> str:
+        """Where Last.fm sends the user back after they approve us."""
+        return self.web_url.rstrip("/") + self.lastfm_callback_path
+
+    @property
+    def cookie_secure(self) -> bool:
+        """Secure cookies whenever the app is served over HTTPS."""
+        return self.web_url.startswith("https://")
 
 
 settings = Settings()

@@ -8,7 +8,9 @@
     "start": "next start"
   },
   "dependencies": {
+    "@danceseek/api-client": "file:../../packages/api-client",
     "next": "^15.1.6",
+    "openapi-fetch": "^0.13.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

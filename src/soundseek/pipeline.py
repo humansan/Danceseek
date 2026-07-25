@@ -36,17 +36,24 @@ def _assemble(page: RawSetlistPage, tracks) -> Setlist:
     )
 
 
-def build_setlist(url: str, force: bool = False) -> Setlist:
-    """Fetch + extract + LLM-normalize a URL into a Setlist. Does NOT persist.
+def build_from_html(html: str, url: str) -> Setlist:
+    """Extract + LLM-normalize already-fetched HTML. Does NOT persist.
 
-    Split out of ingest() so the background worker can normalize a set and then
-    save it under an id it already handed to the client (the stub row's id),
-    rather than minting a fresh one.
+    For callers that have the page in hand (the ingest tool captures it, stores
+    it, then normalizes) so the fetch isn't repeated.
     """
-    html = fetcher.fetch(url, force=force)
     page = extract(html, url)
     tracks = normalize(page)
     return _assemble(page, tracks)
+
+
+def build_setlist(url: str, force: bool = False) -> Setlist:
+    """Fetch + extract + LLM-normalize a URL into a Setlist. Does NOT persist.
+
+    Split out of ingest() so a caller can normalize a set and then save it under
+    an id it already holds, rather than minting a fresh one.
+    """
+    return build_from_html(fetcher.fetch(url, force=force), url)
 
 
 def ingest(url: str, force: bool = False, skip_llm: bool = False) -> Setlist:
