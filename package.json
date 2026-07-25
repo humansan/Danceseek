@@ -1,0 +1,15 @@
+{
+  "name": "danceseek",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Monorepo root. Exists so npm installs apps/web and packages/* together — the generated API client imports openapi-fetch, and without a workspace that dependency only resolves on a machine where the package was installed separately.",
+  "workspaces": [
+    "apps/web",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace apps/web",
+    "dev": "npm run dev --workspace apps/web",
+    "generate": "npm run generate --workspace @danceseek/api-client"
+  }
+}
