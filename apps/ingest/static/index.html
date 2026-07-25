@@ -16,7 +16,7 @@
     margin:0; background:var(--bg); color:var(--fg); font-family:var(--mono);
     font-size:13px; line-height:1.5;
   }
-  .wrap { max-width:1000px; margin:0 auto; padding:24px 20px 60px; }
+  .wrap { max-width:1100px; margin:0 auto; padding:24px 20px 60px; }
   header { border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:20px; }
   h1 { font-size:14px; margin:0; font-weight:600; letter-spacing:.02em; }
   h1 .dim { color:var(--dim); font-weight:400; }
@@ -26,11 +26,21 @@
 
   form { background:var(--surface); border:1px solid var(--border); padding:14px; }
   label.field { display:block; font-size:11px; color:var(--dim); margin-bottom:5px; }
-  input[type=url] {
+  label.field + label.field { margin-top:12px; }
+  input[type=url], input[type=text], textarea {
     width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--border);
     padding:9px 10px; font-family:var(--mono); font-size:13px;
   }
-  input[type=url]:focus { outline:none; border-color:var(--accent); }
+  textarea { min-height:170px; resize:vertical; line-height:1.55; }
+  input:focus, textarea:focus { outline:none; border-color:var(--accent); }
+
+  /* Source picker: scraped 1001tracklists vs. a hand-pasted YouTube tracklist. */
+  .tabs { display:flex; gap:0; margin-bottom:14px; border-bottom:1px solid var(--border); }
+  .tab { background:none; border:none; border-bottom:2px solid transparent; color:var(--dim);
+         font-family:var(--mono); font-size:12px; font-weight:400; padding:6px 12px; cursor:pointer; }
+  .tab:hover { color:var(--fg); }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+
   .opts { display:flex; flex-wrap:wrap; gap:18px; margin:12px 0 14px; }
   .opt { display:flex; gap:7px; align-items:flex-start; cursor:pointer; }
   .opt input { margin:3px 0 0; accent-color:var(--accent); cursor:pointer; }
@@ -43,6 +53,7 @@
   }
   button.secondary { background:transparent; color:var(--dim); border-color:var(--border); font-weight:400; }
   button.secondary:hover:not(:disabled) { color:var(--fg); border-color:var(--dim); }
+  button.small { padding:4px 10px; font-size:11px; }
   button:disabled { opacity:.4; cursor:not-allowed; }
   .err { color:var(--err); font-size:12px; margin-left:4px; }
 
@@ -77,7 +88,8 @@
 
   /* Results table — the `soundseek show` view, in the browser. */
   .resultHead { display:flex; justify-content:space-between; align-items:baseline;
-                gap:12px; padding:0 2px 6px; font-size:12px; }
+                gap:12px; padding:0 2px 6px; font-size:12px; flex-wrap:wrap; }
+  .resultHead .right { display:flex; gap:8px; align-items:center; }
   .tableScroll { border:1px solid var(--border); overflow-x:auto; }
   table.tracks { font-size:12px; }
   table.tracks th { background:var(--surface); padding:6px 8px; white-space:nowrap;
@@ -92,6 +104,8 @@
   table.tracks .res .letters { color:var(--ok); }
   table.tracks .res .conf { color:var(--dim); }
   table.tracks .res .none { color:var(--dim); }
+  table.tracks .res .pending { color:var(--warn); }
+  table.tracks .res .manual { color:var(--accent); }
   table.tracks .res .unrel { color:var(--warn); }
   table.tracks .id { color:var(--flag); }
   table.tracks tr.layered td:first-child { padding-left:16px; }
@@ -101,6 +115,23 @@
   .p-lastfm { color:var(--link); } .p-spotify { color:var(--ok); } .p-youtube { color:var(--warn); }
   .muted { color:var(--dim); }
   a { color:var(--link); }
+
+  /* Edit mode — same grid, cells become fields. */
+  table.tracks input[type=text] {
+    width:100%; min-width:90px; background:var(--bg); color:var(--fg);
+    border:1px solid var(--border); padding:3px 5px; font-family:var(--mono); font-size:12px;
+  }
+  table.tracks input[type=text]:focus { outline:none; border-color:var(--accent); }
+  table.tracks .f-cue input { min-width:64px; }
+  table.tracks .f-lastfm { display:flex; gap:4px; min-width:260px; }
+  table.tracks .f-lastfm input::placeholder { color:#55555c; }
+  table.tracks input[type=checkbox] { accent-color:var(--flag); cursor:pointer; }
+  table.tracks .del { background:none; border:none; color:var(--dim); cursor:pointer;
+                      font-size:13px; padding:0 4px; font-weight:400; }
+  table.tracks .del:hover { color:var(--err); }
+  table.tracks tr.editing.dropped td { opacity:.35; text-decoration:line-through; }
+  .editHint { color:var(--dim); font-size:11px; padding:6px 2px 0; }
+  .saveNote { color:var(--ok); font-size:11px; }
 </style>
 </head>
 <body>
@@ -114,9 +145,30 @@
   </header>
 
   <form id="form">
-    <label class="field" for="url">1001tracklists URL</label>
-    <input id="url" type="url" autocomplete="off" spellcheck="false"
-           placeholder="https://www.1001tracklists.com/tracklist/…/….html" required />
+    <div class="tabs">
+      <button type="button" class="tab active" id="tabTl" data-source="tl">1001tracklists</button>
+      <button type="button" class="tab" id="tabManual" data-source="manual">manual · youtube</button>
+    </div>
+
+    <div id="panelTl">
+      <label class="field" for="url">1001tracklists URL</label>
+      <input id="url" type="url" autocomplete="off" spellcheck="false"
+             placeholder="https://www.1001tracklists.com/tracklist/…/….html" />
+    </div>
+
+    <div id="panelManual" hidden>
+      <label class="field" for="ytUrl">YouTube video URL</label>
+      <input id="ytUrl" type="url" autocomplete="off" spellcheck="false"
+             placeholder="https://www.youtube.com/watch?v=…" />
+
+      <label class="field" for="manualTitle">Title <span class="muted">— "DJ @ Event 2025-11-14" fills the DJ/event/year filters</span></label>
+      <input id="manualTitle" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Skrillex @ Coachella 2025-04-12" />
+
+      <label class="field" for="manualText">Tracklist text <span class="muted">— paste the video's chapters, description or a comment</span></label>
+      <textarea id="manualText" spellcheck="false"
+                placeholder="0:00 Skrillex &amp; Fred again.. - Rumble&#10;3:41 Hamdi - Skanka (VIP)&#10;7:12 ID - ID"></textarea>
+    </div>
 
     <div class="opts">
       <label class="opt">
@@ -154,16 +206,29 @@
     <h2>Result</h2>
     <div class="resultHead">
       <span id="resultTitle"></span>
-      <span id="resultCoverage" class="muted"></span>
+      <span class="right">
+        <span id="resultCoverage" class="muted"></span>
+        <span id="saveNote" class="saveNote"></span>
+        <span id="editError" class="err"></span>
+        <button type="button" class="secondary small" id="editBtn">edit</button>
+        <button type="button" class="small" id="saveBtn" hidden>save</button>
+        <button type="button" class="secondary small" id="cancelBtn" hidden>cancel</button>
+      </span>
     </div>
     <div class="tableScroll">
       <table class="tracks">
         <thead><tr>
           <th class="num">#</th><th class="num">row</th><th>cue</th><th>artists</th>
-          <th>title</th><th>remix</th><th>flags</th><th>res</th>
+          <th>title</th><th>remix</th><th>flags</th><th>res</th><th></th>
         </tr></thead>
         <tbody id="tracks"></tbody>
       </table>
+    </div>
+    <div id="editHint" class="editHint" hidden>
+      Editing artists / title / remix / ID drops that row's match — it was picked for the old
+      text — so re-resolve afterwards. A Last.fm artist+track you type in is kept as-is and
+      never overwritten. Rows you delete are gone on save.
+      <button type="button" class="secondary small" id="addRow" style="margin-left:8px">+ row</button>
     </div>
   </div>
 
@@ -197,6 +262,23 @@ function appendLog(ev) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+// --- source tabs ------------------------------------------------------------
+
+let source = "tl";
+
+function selectSource(next) {
+  source = next;
+  $("tabTl").classList.toggle("active", next === "tl");
+  $("tabManual").classList.toggle("active", next === "manual");
+  $("panelTl").hidden = next !== "tl";
+  $("panelManual").hidden = next === "tl";
+  $("go").textContent = next === "tl" ? "ingest" : "add set";
+  $("formError").textContent = "";
+}
+
+$("tabTl").onclick = () => selectSource("tl");
+$("tabManual").onclick = () => selectSource("manual");
+
 function setStatus(job) {
   const running = !["done", "failed"].includes(job.status);
   const kind = job.status === "done" ? "done" : job.status === "failed" ? "failed" : "running";
@@ -229,27 +311,43 @@ function follow(jobId) {
   stream.onerror = () => { stream.close(); stream = null; $("go").disabled = false; $("rerun").disabled = false; };
 }
 
+/** The job body for the active source. `mode` is "ingest"/"manual"/"reresolve". */
+function jobBody(mode) {
+  const manual = source === "manual";
+  const url = (manual ? $("ytUrl") : $("url")).value.trim();
+  return {
+    url, mode: mode === "ingest" && manual ? "manual" : mode,
+    lastfm_only: $("lastfm_only").checked,
+    force: $("force").checked,
+    title: manual ? $("manualTitle").value : null,
+    tracklist: manual ? $("manualText").value : null,
+  };
+}
+
 async function submit(mode) {
   $("formError").textContent = "";
-  const url = $("url").value.trim();
-  if (!url) return;
+  const body = jobBody(mode);
+  if (!body.url) {
+    $("formError").textContent = source === "manual" ? "YouTube URL required" : "URL required";
+    return;
+  }
+  if (body.mode === "manual" && !body.tracklist.trim()) {
+    $("formError").textContent = "paste the tracklist text";
+    return;
+  }
   $("go").disabled = $("rerun").disabled = true;
   try {
     const r = await fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url, mode,
-        lastfm_only: $("lastfm_only").checked,
-        force: $("force").checked,
-      }),
+      body: JSON.stringify(body),
     });
-    const body = await r.json();
-    if (!r.ok) throw new Error(body.detail || `HTTP ${r.status}`);
+    const payload = await r.json();
+    if (!r.ok) throw new Error(payload.detail || `HTTP ${r.status}`);
     clearLog();
     $("resultWrap").hidden = true;
-    setStatus(body);
-    follow(body.id);
+    setStatus(payload);
+    follow(payload.id);
   } catch (e) {
     $("formError").textContent = String(e.message || e).split("\n")[0];
     $("go").disabled = $("rerun").disabled = false;
@@ -263,20 +361,26 @@ function platformPills(list) {
   return (list || []).map((p) => `<span class="pill p-${p}">${p}</span>`).join("");
 }
 
-// --- results table (the `soundseek show` view) -------------------------------
+// --- results table ----------------------------------------------------------
+// Two renderings of the same rows: a read-only view, and an editable one whose
+// fields are collected back into a PATCH. `current` is what's on screen.
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+let current = { id: null, setlist: null, coverage: null };
+let editing = false;
+
 /** Mirrors cli._res_cell: platform letters + confidence, or a status word. */
 function resCell(res) {
-  if (!res) return "";
+  if (!res) return '<span class="pending">pending</span>';  // cleared by an edit
   if (res.status === "unreleased") return '<span class="unrel">unrel</span>';
   if (res.status === "no_match") return '<span class="none">—</span>';
   const letters = [["S", res.spotify], ["Y", res.youtube], ["L", res.lastfm]]
     .filter(([, m]) => m).map(([l]) => l).join("");
   if (!letters) return '<span class="none">—</span>';
-  return `<span class="letters">${letters}</span> <span class="conf">${(res.confidence ?? 0).toFixed(2)}</span>`;
+  const cls = res.method === "manual" ? "manual" : "letters";
+  return `<span class="${cls}">${letters}</span> <span class="conf">${(res.confidence ?? 0).toFixed(2)}</span>`;
 }
 
 function trackFlags(t) {
@@ -287,36 +391,120 @@ function trackFlags(t) {
   return flags.join(" ");
 }
 
-function renderTracks(setlist, coverage) {
+function textInput(name, value, placeholder) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.dataset.field = name;
+  input.value = value ?? "";
+  if (placeholder) input.placeholder = placeholder;
+  return input;
+}
+
+function cell(className, ...children) {
+  const td = document.createElement("td");
+  if (className) td.className = className;
+  for (const child of children) td.append(child);
+  return td;
+}
+
+/** The two Last.fm fields — the exact strings that get scrobbled. */
+function lastfmCell(res) {
+  const wrap = document.createElement("div");
+  wrap.className = "f-lastfm";
+  wrap.append(
+    textInput("lastfm_artist", res?.lastfm?.artist, "last.fm artist"),
+    textInput("lastfm_track", res?.lastfm?.track, "last.fm track"),
+  );
+  return cell("res", wrap);
+}
+
+function editRow(t) {
+  const tr = document.createElement("tr");
+  tr.className = "editing";
+  tr.dataset.kind = "track";
+  if (t.position != null) tr.dataset.position = String(t.position);
+
+  const isId = document.createElement("input");
+  isId.type = "checkbox";
+  isId.dataset.field = "is_id";
+  isId.checked = !!t.is_id;
+  isId.title = "unreleased / unidentified — nothing to match";
+
+  const del = document.createElement("button");
+  del.type = "button";
+  del.className = "del";
+  del.title = "delete this row on save";
+  del.textContent = "✕";
+  del.onclick = () => tr.classList.toggle("dropped");
+
+  tr.append(
+    cell("num", String(t.source_track_number ?? "")),
+    cell("num", String(t.position ?? "new")),
+    cell("f-cue", textInput("cue_time", t.cue_time, "0:00")),
+    cell("", textInput("artists", (t.artists || []).join(", "), "artist, artist")),
+    cell("", textInput("title", t.title, t.is_id ? "ID" : "title")),
+    cell("remix", textInput("remix", t.remix, "remix")),
+    cell("flags", isId),
+    lastfmCell(t.resolution),
+    cell("", del),
+  );
+  return tr;
+}
+
+function editComponentRow(c) {
+  const tr = document.createElement("tr");
+  tr.className = "editing component";
+  tr.dataset.kind = "component";
+  tr.append(
+    cell("", ""), cell("", ""), cell("", ""),
+    cell("", textInput("artists", (c.artists || []).join(", "), "↳ artist")),
+    cell("", textInput("title", c.title, "title")),
+    cell("remix", textInput("remix", c.remix, "remix")),
+    cell("", ""),
+    lastfmCell(c.resolution),
+    cell("", ""),
+  );
+  return tr;
+}
+
+function viewRow(t) {
+  const layered = t.played_with != null;
+  const tr = document.createElement("tr");
+  if (layered) tr.className = "layered";
+  const title = t.title ? esc(t.title) : (t.is_id ? '<span class="id">?</span>' : esc(t.raw_text));
+  tr.innerHTML =
+    `<td class="num">${t.source_track_number ?? (layered ? "w/" : "")}</td>` +
+    `<td class="num">${t.position}</td>` +
+    `<td class="cue">${esc(t.cue_time || "")}</td>` +
+    `<td>${esc((t.artists || []).join(", "))}</td>` +
+    `<td>${title}</td>` +
+    `<td class="remix">${esc(t.remix || "")}</td>` +
+    `<td class="flags">${esc(trackFlags(t))}</td>` +
+    `<td class="res">${resCell(t.resolution)}</td><td></td>`;
+  return tr;
+}
+
+function viewComponentRow(c) {
+  const tr = document.createElement("tr");
+  tr.className = "component";
+  tr.innerHTML =
+    `<td colspan="3"></td>` +
+    `<td>↳ ${esc((c.artists || []).join(", "))}</td>` +
+    `<td>${esc(c.title || "")}</td>` +
+    `<td class="remix">${esc(c.remix || "")}</td>` +
+    `<td></td><td class="res">${resCell(c.resolution)}</td><td></td>`;
+  return tr;
+}
+
+function renderTracks() {
+  const { setlist, coverage } = current;
   const tbody = $("tracks");
   tbody.innerHTML = "";
   for (const t of setlist.tracks || []) {
-    const layered = t.played_with != null;
-    const title = t.title || (t.is_id ? '<span class="id">?</span>' : esc(t.raw_text));
-    const tr = document.createElement("tr");
-    if (layered) tr.className = "layered";
-    tr.innerHTML =
-      `<td class="num">${t.source_track_number ?? (layered ? "w/" : "")}</td>` +
-      `<td class="num">${t.position}</td>` +
-      `<td class="cue">${esc(t.cue_time || "")}</td>` +
-      `<td>${esc((t.artists || []).join(", "))}</td>` +
-      `<td>${t.title ? esc(t.title) : title}</td>` +
-      `<td class="remix">${esc(t.remix || "")}</td>` +
-      `<td class="flags">${esc(trackFlags(t))}</td>` +
-      `<td class="res">${resCell(t.resolution)}</td>`;
-    tbody.appendChild(tr);
-
+    tbody.appendChild(editing ? editRow(t) : viewRow(t));
     // Mashup components resolve individually — that's what gets scrobbled.
     for (const c of t.mashup_components || []) {
-      const sub = document.createElement("tr");
-      sub.className = "component";
-      sub.innerHTML =
-        `<td colspan="3"></td>` +
-        `<td>↳ ${esc((c.artists || []).join(", "))}</td>` +
-        `<td>${esc(c.title || "")}</td>` +
-        `<td class="remix">${esc(c.remix || "")}</td>` +
-        `<td></td><td class="res">${resCell(c.resolution)}</td>`;
-      tbody.appendChild(sub);
+      tbody.appendChild(editing ? editComponentRow(c) : viewComponentRow(c));
     }
   }
 
@@ -324,10 +512,89 @@ function renderTracks(setlist, coverage) {
   const c = coverage || {};
   $("resultCoverage").textContent = c.total
     ? `${c.resolved ?? 0} resolved · ${c.partial ?? 0} partial · ${c.no_match ?? 0} no match` +
-      ` · ${c.unreleased ?? 0} unreleased  [${(c.platforms || []).join(", ")}]`
+      ` · ${c.unreleased ?? 0} unreleased${c.pending ? ` · ${c.pending} pending` : ""}` +
+      `  [${(c.platforms || []).join(", ")}]`
     : `${(setlist.tracks || []).length} tracks`;
+
+  $("editBtn").hidden = editing;
+  $("saveBtn").hidden = !editing;
+  $("cancelBtn").hidden = !editing;
+  $("editHint").hidden = !editing;
   $("resultWrap").hidden = false;
 }
+
+/** Walk the edited rows back into the PATCH body. Dropped rows are omitted. */
+function collectEdits() {
+  const read = (tr, field) => tr.querySelector(`[data-field="${field}"]`);
+  const value = (tr, field) => (read(tr, field)?.value ?? "").trim();
+  const splitArtists = (s) => s.split(",").map((a) => a.trim()).filter(Boolean);
+
+  const tracks = [];
+  for (const tr of $("tracks").querySelectorAll("tr[data-kind]")) {
+    if (tr.dataset.kind === "component") {
+      const parent = tracks[tracks.length - 1];
+      if (!parent) continue;  // a dropped track takes its components with it
+      parent.mashup_components.push({
+        artists: splitArtists(value(tr, "artists")),
+        title: value(tr, "title") || null,
+        remix: value(tr, "remix") || null,
+        lastfm_artist: value(tr, "lastfm_artist") || null,
+        lastfm_track: value(tr, "lastfm_track") || null,
+      });
+      continue;
+    }
+    if (tr.classList.contains("dropped")) { tracks.push(null); continue; }
+    tracks.push({
+      position: tr.dataset.position ? Number(tr.dataset.position) : null,
+      cue_time: value(tr, "cue_time") || null,
+      artists: splitArtists(value(tr, "artists")),
+      title: value(tr, "title") || null,
+      remix: value(tr, "remix") || null,
+      is_id: !!read(tr, "is_id")?.checked,
+      lastfm_artist: value(tr, "lastfm_artist") || null,
+      lastfm_track: value(tr, "lastfm_track") || null,
+      mashup_components: [],
+    });
+  }
+  // A dropped row was kept as a null placeholder so its component rows could
+  // find (and be discarded with) it; strip the placeholders now.
+  return { title: current.setlist.title, tracks: tracks.filter(Boolean) };
+}
+
+$("editBtn").onclick = () => { editing = true; $("saveNote").textContent = ""; renderTracks(); };
+$("cancelBtn").onclick = () => { editing = false; $("editError").textContent = ""; showResult(current.id); };
+
+$("addRow").onclick = () => {
+  $("tracks").appendChild(editRow({ position: null, artists: [], mashup_components: [] }));
+};
+
+$("saveBtn").onclick = async () => {
+  const body = collectEdits();
+  $("editError").textContent = "";
+  if (!body.tracks.length) { $("editError").textContent = "keep at least one track"; return; }
+  $("saveBtn").disabled = true;
+  try {
+    const r = await fetch(`/api/setlists/${current.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await r.json();
+    if (!r.ok) throw new Error(payload.detail || `HTTP ${r.status}`);
+    editing = false;
+    current = { id: current.id, setlist: payload.setlist, coverage: payload.coverage };
+    renderTracks();
+    const pending = payload.coverage?.pending || 0;
+    $("saveNote").textContent = pending
+      ? `saved — ${pending} slot${pending === 1 ? "" : "s"} need a re-resolve`
+      : "saved";
+    loadCatalog();
+  } catch (e) {
+    $("editError").textContent = String(e.message || e).split("\n")[0];
+  } finally {
+    $("saveBtn").disabled = false;
+  }
+};
 
 async function showResult(setlistId) {
   if (!setlistId) { $("resultWrap").hidden = true; return; }
@@ -335,7 +602,10 @@ async function showResult(setlistId) {
     const r = await fetch(`/api/setlists/${setlistId}`);
     if (!r.ok) return;
     const data = await r.json();
-    renderTracks(data.setlist, data.coverage);
+    editing = false;
+    $("saveNote").textContent = "";
+    current = { id: setlistId, setlist: data.setlist, coverage: data.coverage };
+    renderTracks();
   } catch { /* the run already reported anything that matters */ }
 }
 
@@ -348,7 +618,7 @@ async function loadJobs() {
     const tr = document.createElement("tr");
     tr.className = "clickable";
     tr.innerHTML = `<td class="muted">${time(j.created_at)}</td>
-      <td class="trunc">${j.title || j.url}</td>
+      <td class="trunc">${esc(j.title || j.url)}</td>
       <td>${platformPills(j.platforms)}</td>
       <td class="${j.status === "failed" ? "err" : ""}">${j.status}</td>`;
     tr.onclick = async () => {
@@ -377,7 +647,7 @@ async function loadCatalog() {
     tr.innerHTML = `<td class="trunc">${esc(s.title || s.id)}</td>
       <td>${s.track_count}</td><td>${cov}</td>
       <td class="${s.status === "resolved" ? "" : "muted"}">${s.status}</td>`;
-    tr.onclick = () => showResult(s.id);  // inspect anything already in the catalog
+    tr.onclick = () => showResult(s.id);  // inspect (and edit) anything in the catalog
     tbody.appendChild(tr);
   }
 }

@@ -23,11 +23,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from soundseek import db
+from soundseek import db, edit
 from soundseek import ingest as runner  # the shared job runner (CLI uses it too)
 from soundseek.fetcher import FetchError, validate_url
+from soundseek.pipeline import ManualInputError, youtube_watch_url
 
 STATIC = Path(__file__).parent / "static"
+
+MODES = ("ingest", "reresolve", "manual")
 
 app = FastAPI(title="SoundSeek Ingest Console", version="0.1.0")
 jobs = runner.JobStore()
@@ -37,7 +40,10 @@ class IngestRequest(BaseModel):
     url: str
     lastfm_only: bool = False
     force: bool = False
-    mode: str = "ingest"  # "ingest" | "reresolve"
+    mode: str = "ingest"  # "ingest" | "reresolve" | "manual"
+    # manual mode: the YouTube link goes in `url`, and these carry the rest.
+    title: str | None = None
+    tracklist: str | None = None
 
 
 @app.get("/")
@@ -48,18 +54,31 @@ def index() -> FileResponse:
 @app.post("/api/jobs", status_code=201)
 def create_job(body: IngestRequest) -> dict:
     url = body.url.strip()
-    try:
-        validate_url(url)
-    except FetchError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    if body.mode not in ("ingest", "reresolve"):
-        raise HTTPException(status_code=422, detail="mode must be 'ingest' or 'reresolve'")
+    if body.mode not in MODES:
+        raise HTTPException(
+            status_code=422, detail=f"mode must be one of {', '.join(MODES)}"
+        )
+
+    if body.mode == "manual":
+        try:
+            url = youtube_watch_url(url)
+        except ManualInputError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        if not (body.tracklist or "").strip():
+            raise HTTPException(status_code=422, detail="a manual set needs tracklist text")
+    else:
+        try:
+            validate_url(url)
+        except FetchError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
 
     job = jobs.create(
         url=url,
         platforms=runner.normalize_platforms(body.lastfm_only),
         force=body.force,
         mode=body.mode,
+        manual_text=body.tracklist,
+        manual_title=(body.title or "").strip() or None,
     )
     runner.start(job)
     return job.snapshot()
@@ -116,6 +135,31 @@ def get_setlist(setlist_id: str) -> dict:
         raise HTTPException(status_code=404, detail="setlist not found")
     setlist, meta = result
     return {"setlist": setlist.model_dump(mode="json"), **meta}
+
+
+@app.patch("/api/setlists/{setlist_id}")
+def edit_setlist(setlist_id: str, body: edit.SetlistEdit) -> dict:
+    """Save the results table after the maintainer has corrected it.
+
+    The whole table is submitted, not a diff: rows left out are deleted, and
+    rows with a null position are new. See `soundseek.edit` for what an edit
+    does to the resolutions that were stamped on the old values.
+    """
+    result = db.get_by_id(setlist_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="setlist not found")
+    setlist, meta = result
+
+    try:
+        edited = edit.apply_edits(setlist, body)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    coverage = edit.save_edited(edited, meta)
+    return {
+        "setlist": edited.model_dump(mode="json"),
+        **{**meta, "coverage": coverage},
+    }
 
 
 def main() -> None:

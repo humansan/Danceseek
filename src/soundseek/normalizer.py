@@ -10,6 +10,7 @@ not trusted from the model.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -29,7 +30,8 @@ You receive numbered track rows exactly as they appear on the site. For each row
 - `remix`: parenthesized or suffixed version info, e.g. "Extended Mix", "Hamdi Remix", "Skrillex & Fred again.. Edit", "Fred again.. Mashup". Null if the parenthetical is part of the actual title (e.g. "Danielle (Smile On My Face)" — subtitle, not a remix) or absent.
 - Unreleased/unidentified tracks: if the artist and/or title is literally "ID", set `is_id` to true. For "ID - ID" leave `artists` empty and `title` null. For "Artist - ID" keep the artists but leave `title` null. Never guess what an ID track might be.
 - Mashup components: some rows are followed by indented `component:` lines — these are the mashup's component tracks exactly as 1001tracklists lists them. For such rows, fill `mashup_components` with one entry per component line IN ORDER (split each line into artists/title/remix by the same rules). Never invent components beyond the given lines.
-- If a row's text contains "vs." (a mashup) but has NO component lines, derive `mashup_components` best-effort by splitting the artists/titles across the "vs.". Leave `mashup_components` empty for normal tracks.
+- If a row's text holds TWO OR MORE "Artist - Title" pairs joined by "vs.", " x " or "/" (a mashup) but has NO component lines, derive `mashup_components` best-effort by splitting the artists/titles across that separator. One "Artist - Title" pair is a normal track no matter how its artists are joined ("Skrillex x Fred again.. - Rumble" is a collaboration, not a mashup). Leave `mashup_components` empty for normal tracks.
+- A bracketed credit at the END of a mashup row — "[Someone Mashup]", "(Someone Edit)", "[Someone Bootleg]" — names whoever made the COMBINATION. Put it in the row's own `remix` and leave the last component's `remix` null: a component only takes version info written immediately after its own title. E.g. "Zedd ft. Foxes - Clarity (Vicetone Remix) x The Chainsmokers - Closer [Nala Mashup]" -> row remix "Nala Mashup"; component 1 = Zedd + Foxes / "Clarity" / "Vicetone Remix"; component 2 = The Chainsmokers / "Closer" / null.
 - Set `played_with` to null always (it is computed elsewhere).
 - Never add tracks, drop tracks, or reorder. Output exactly one entry per input row, in the same order.
 - Never use outside knowledge to "fix" names — only restructure what is written."""
@@ -115,6 +117,44 @@ def _dump_llm_input(page: RawSetlistPage, mode: str, user_content: str):
     return path
 
 
+# A credit closing a mashup row — "[Flipboitamidles Mashup]" — names who made
+# the combination, not a version of the track it happens to sit next to. Models
+# reliably staple it onto the LAST component, and that component then matches
+# nothing: "San Holo - Lights (Flipboitamidles Mashup)" is not a track anybody
+# has, so the row resolves to no_match while its sibling resolves fine. The
+# prompt asks for the right answer; this makes sure of it, on the same principle
+# as `played_with` — what can be decided from the text is decided here, not by
+# the model. Trailing "/" and friends are tolerated: pasted tracklists use them
+# as row separators.
+_ROW_CREDIT_RE = re.compile(r"(?P<open>[\[(])\s*(?P<credit>[^\[\]()]+?)\s*[\])][\s/|·•\-–—]*$")
+
+# Words that name the act of combining tracks: a credit containing one of these
+# can only belong to the whole row. Square brackets get the same treatment —
+# tracklist convention reserves them for annotations about the entry as a whole,
+# while a component's own version info is written in parentheses after its title.
+_COMBINATION_WORDS = ("mashup", "blend", "mixup", "bootleg", "flip")
+
+
+def _reattribute_mashup_credit(tracks: list[ParsedTrack]) -> None:
+    """Move a trailing whole-row credit off the last component and onto the row."""
+    for track in tracks:
+        if not track.mashup_components:
+            continue
+        match = _ROW_CREDIT_RE.search(track.raw_text)
+        if match is None:
+            continue
+
+        credit = match.group("credit")
+        lowered = credit.casefold()
+        if match.group("open") != "[" and not any(w in lowered for w in _COMBINATION_WORDS):
+            continue  # e.g. "(Vicetone Remix)" really may be that component's
+
+        last = track.mashup_components[-1]
+        if last.remix and last.remix.strip().casefold() == lowered:
+            last.remix = None
+            track.remix = track.remix or credit
+
+
 def _apply_played_with(page: RawSetlistPage, tracks: list[ParsedTrack]) -> None:
     """`played_with` comes from the DOM's "w/" markers, not the model:
     a w/ row is layered over the nearest preceding non-w/ track."""
@@ -147,6 +187,7 @@ def normalize(page: RawSetlistPage) -> list[ParsedTrack]:
         )
         _validate_round_trip(page, result.tracks)
         _apply_played_with(page, result.tracks)
+        _reattribute_mashup_credit(result.tracks)
         return result.tracks
 
     if page.fallback_text:
@@ -161,6 +202,7 @@ def normalize(page: RawSetlistPage) -> list[ParsedTrack]:
                 "Fallback text extraction produced no tracks — page likely is not "
                 "a tracklist or the fetch was blocked."
             )
+        _reattribute_mashup_credit(result.tracks)
         return result.tracks
 
     raise NormalizationError("Nothing to normalize: no rows and no fallback text.")

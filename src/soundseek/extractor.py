@@ -1,8 +1,13 @@
-"""Deterministic extraction: 1001tracklists HTML -> RawSetlistPage.
+"""Deterministic extraction: source -> RawSetlistPage.
 
 All CSS selectors for 1001TL's markup live in this module so layout drift
 only breaks one place. Rows are extracted verbatim (`raw_text`); splitting
 artist/title/remix is the LLM normalizer's job.
+
+`extract_manual` is the same job for a tracklist a human pasted out of a
+YouTube video. It yields the identical RawSetlistPage, so the pasted text goes
+through the exact prompt and the exact round-trip validation the scraped rows
+do — including the check that the LLM invented nothing.
 
 Observed markup (2026-07):
     div.tlpItem[data-trno]                  one row per track
@@ -99,12 +104,14 @@ def _component_text(item: Tag) -> str | None:
     return None
 
 
-def _parse_page_title(soup: BeautifulSoup) -> tuple[str | None, list[str], str | None, str | None]:
-    """Return (title, dj_names, event, date_recorded) from the page header."""
-    el = soup.select_one("h1#pageTitle") or soup.find("meta", property="og:title")
-    if el is None:
-        return None, [], None, None
-    title = _clean(el.get_text(" ", strip=True) if isinstance(el, Tag) and el.name == "h1" else str(el.get("content", "")))
+def parse_title(title: str | None) -> tuple[str | None, list[str], str | None, str | None]:
+    """Split a set title into (title, dj_names, event, date_recorded).
+
+    Public because the manual path needs it too: a hand-typed title following
+    the same "DJ @ Event 2025-11-14" convention should land the set on the same
+    DJ/event/year filter chips as a scraped one.
+    """
+    title = _clean(title or "")
     if not title:
         return None, [], None, None
 
@@ -113,6 +120,15 @@ def _parse_page_title(soup: BeautifulSoup) -> tuple[str | None, list[str], str |
         return title, [], None, None
     djs = [d.strip() for d in re.split(r"\s*[&,]\s*", m.group("djs")) if d.strip()]
     return title, djs, m.group("event"), m.group("date")
+
+
+def _parse_page_title(soup: BeautifulSoup) -> tuple[str | None, list[str], str | None, str | None]:
+    """Return (title, dj_names, event, date_recorded) from the page header."""
+    el = soup.select_one("h1#pageTitle") or soup.find("meta", property="og:title")
+    if el is None:
+        return None, [], None, None
+    raw = el.get_text(" ", strip=True) if isinstance(el, Tag) and el.name == "h1" else str(el.get("content", ""))
+    return parse_title(raw)
 
 
 def _media_kind(url: str) -> str:
@@ -141,6 +157,109 @@ def _extract_media(soup: BeautifulSoup) -> tuple[str | None, str | None]:
         url = str(iframe["src"])
         return url, _media_kind(url)
     return None, None
+
+
+# ---------------------------------------------------------------------------
+# Pasted tracklists (YouTube chapters, descriptions, comments)
+# ---------------------------------------------------------------------------
+
+# A timestamp: 0:00 / 12:34 / 1:02:30, optionally bracketed.
+_TS = r"\d{1,2}:\d{2}(?::\d{2})?"
+# Leading: "0:00 ", "[0:00] ", "(0:00) - ", "0:00 — "
+_LEADING_TS_RE = re.compile(rf"^[\[\(]?\s*(?P<ts>{_TS})\s*[\]\)]?\s*[-–—:.)]?\s*")
+# Trailing: "... @ 12:34", "... [12:34]", "... (1:02:30)"
+_TRAILING_TS_RE = re.compile(rf"\s*[@\-–—]?\s*[\[\(]?\s*(?P<ts>{_TS})\s*[\]\)]?\s*$")
+# List numbering: "1. ", "01) ", "12 - " (kept distinct from timestamps)
+_LIST_NUM_RE = re.compile(r"^\s*\d{1,3}\s*[.)\]]\s+")
+
+# Lines that are never tracks. Deliberately short: anything ambiguous is better
+# passed through and deleted by hand in the console than dropped silently.
+_JUNK_PREFIXES = ("http://", "https://", "www.", "#")
+_JUNK_EXACT = ("tracklist", "tracklist:", "track list", "track list:", "setlist", "setlist:")
+
+
+def _normalize_cue(ts: str) -> str:
+    """`00:03:41` -> `3:41`, `01:02:30` -> `1:02:30`, `0:00` -> `0:00`."""
+    parts = [int(p) for p in ts.split(":")]
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes}:{seconds:02d}"
+    minutes, seconds = parts
+    return f"{minutes}:{seconds:02d}"
+
+
+def _split_manual_line(line: str) -> tuple[str, str | None] | None:
+    """One pasted line -> (track text, cue) — or None when it is not a track.
+
+    The timestamp and any list numbering are stripped here rather than left to
+    the LLM: they are unambiguous, and a cue that drives scrobble windows should
+    not depend on a model getting it right.
+    """
+    text = _clean(line)
+    if not text:
+        return None
+
+    cue = None
+    text = _LIST_NUM_RE.sub("", text, count=1)
+    leading = _LEADING_TS_RE.match(text)
+    if leading:
+        cue = _normalize_cue(leading.group("ts"))
+        text = text[leading.end():]
+        text = _LIST_NUM_RE.sub("", text, count=1)  # "0:00 1. Artist - Title"
+    else:
+        trailing = _TRAILING_TS_RE.search(text)
+        if trailing and trailing.start() > 0:
+            cue = _normalize_cue(trailing.group("ts"))
+            text = text[: trailing.start()]
+
+    # Pasted lists trail separators off the end of a row ("… [X Mashup] /").
+    text = _clean(text).strip("-–—•·|/").strip()
+    lowered = text.lower()
+    if not text or lowered in _JUNK_EXACT or lowered.startswith(_JUNK_PREFIXES):
+        return None
+    if not re.search(r"[A-Za-z0-9]", text):
+        return None
+    return text, cue
+
+
+def extract_manual(
+    text: str, source_url: str, title: str | None = None, media_url: str | None = None
+) -> RawSetlistPage:
+    """A pasted tracklist -> the same RawSetlistPage the scraper produces."""
+    rows: list[RawTrackRow] = []
+    for line in text.splitlines():
+        parsed = _split_manual_line(line)
+        if parsed is None:
+            continue
+        row_text, cue = parsed
+        rows.append(
+            RawTrackRow(
+                position=len(rows) + 1,
+                source_track_number=len(rows) + 1,
+                cue_time=cue,
+                raw_text=row_text,
+            )
+        )
+
+    if not rows:
+        raise ExtractionError(
+            "No track lines found in the pasted text — check that it is a "
+            "tracklist and not, say, the description around one."
+        )
+
+    clean_title, dj_names, event, date_recorded = parse_title(title)
+    return RawSetlistPage(
+        source_url=source_url,
+        title=clean_title,
+        dj_names=dj_names,
+        event=event,
+        date_recorded=date_recorded,
+        media_url=media_url or source_url,
+        media_kind="youtube",
+        rows=rows,
+    )
 
 
 def extract(html: str, source_url: str) -> RawSetlistPage:

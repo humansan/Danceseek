@@ -14,6 +14,11 @@ Neon, so the web API stays a thin read layer over the results.
   normalize extract the DOM rows, then LLM-normalize them into tracks
   resolve   match tracks against the platforms (all three, or Last.fm only)
 
+A set that 1001tracklists does not have can be added by hand instead (`manual`
+mode): a YouTube link, a title, and the tracklist text copied out of the
+video's chapters or comments. That skips capture entirely — the pasted text is
+the source — and joins the same normalize → resolve path.
+
 Jobs are held in memory: this is a single-user local tool, so a job queue
 table would be ceremony. The results are what's durable.
 """
@@ -46,7 +51,10 @@ class Job:
     url: str
     platforms: list[str]
     force: bool
-    mode: str = "ingest"  # "ingest" | "reresolve"
+    mode: str = "ingest"  # "ingest" | "reresolve" | "manual"
+    # manual mode only: the pasted tracklist and the title to file it under.
+    manual_text: str | None = None
+    manual_title: str | None = None
     status: str = "queued"  # queued | capturing | normalizing | resolving | done | failed
     setlist_id: str | None = None
     title: str | None = None
@@ -85,8 +93,19 @@ class JobStore:
         self._keep = keep
         self._lock = threading.Lock()
 
-    def create(self, url: str, platforms: list[str], force: bool, mode: str = "ingest") -> Job:
-        job = Job(id=str(uuid.uuid4()), url=url, platforms=platforms, force=force, mode=mode)
+    def create(
+        self,
+        url: str,
+        platforms: list[str],
+        force: bool,
+        mode: str = "ingest",
+        manual_text: str | None = None,
+        manual_title: str | None = None,
+    ) -> Job:
+        job = Job(
+            id=str(uuid.uuid4()), url=url, platforms=platforms, force=force, mode=mode,
+            manual_text=manual_text, manual_title=manual_title,
+        )
         with self._lock:
             self._jobs[job.id] = job
             self._order.insert(0, job.id)
@@ -116,6 +135,8 @@ def run_job(job: Job) -> None:
     try:
         if job.mode == "reresolve":
             _run_reresolve(job)
+        elif job.mode == "manual":
+            _run_manual(job)
         else:
             _run_ingest(job)
         job.status = "done"
@@ -192,6 +213,45 @@ def _run_ingest(job: Job) -> None:
     db.upsert_content(setlist, status="resolving")
 
     # --- resolve -----------------------------------------------------------
+    _resolve_with_progress(job, setlist)
+
+
+def _run_manual(job: Job) -> None:
+    """Build a set from a YouTube link plus a hand-pasted tracklist.
+
+    No capture step: the text the maintainer pasted *is* the source, so there
+    is nothing to scrape and nothing to store in `raw_pages`.
+    """
+    job.status = "normalizing"
+    watch_url = pipeline.youtube_watch_url(job.url)
+    job.url = watch_url  # canonical form is the key everything else is stored under
+    job.emit(f"manual tracklist for {watch_url}")
+
+    existing = db.get_by_url(watch_url)
+    if existing is not None and not job.force:
+        setlist, meta = existing
+        job.setlist_id = setlist.id
+        job.title = setlist.title
+        job.emit(
+            f"already added (status: {meta['status']}) — enable 'force' to replace it",
+            level="warn",
+        )
+        return
+
+    lines = len([ln for ln in (job.manual_text or "").splitlines() if ln.strip()])
+    job.emit(f"parsing {lines} pasted lines with the LLM…")
+    setlist = pipeline.build_from_manual(job.manual_text or "", watch_url, job.manual_title)
+    if existing is not None:
+        setlist.id = existing[0].id  # keep the id the site already links to
+    job.setlist_id = setlist.id
+    job.title = setlist.title
+    job.emit(
+        f"parsed {len(setlist.tracks)} tracks — {setlist.title or '(untitled)'}", level="ok"
+    )
+
+    store.save(setlist)
+    db.upsert_content(setlist, status="resolving")
+
     _resolve_with_progress(job, setlist)
 
 

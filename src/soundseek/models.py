@@ -150,8 +150,10 @@ class Resolution(BaseModel):
     youtube: PlatformMatch | None = None
     lastfm: LastfmMatch | None = None
     confidence: float = 0.0
+    # "manual" is a maintainer edit in the console: it outranks anything the
+    # matcher would pick, so a re-resolve leaves it alone.
     # "cascade"/"agent" are legacy values kept so old records stay loadable
-    method: Literal["batch_llm", "registry", "skip", "cascade", "agent"] = "batch_llm"
+    method: Literal["batch_llm", "registry", "skip", "manual", "cascade", "agent"] = "batch_llm"
     resolved_at: str = Field(default_factory=_utcnow)
     notes: str | None = None
 
