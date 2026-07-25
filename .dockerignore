@@ -1,0 +1,15 @@
+# The API image needs src/, apps/api, migrations and the lockfile — nothing else.
+.git
+.venv
+data
+docs
+node_modules
+apps/web
+apps/ingest
+packages
+tests
+.env
+**/__pycache__
+**/.next
+**/*.egg-info
+.pytest_cache

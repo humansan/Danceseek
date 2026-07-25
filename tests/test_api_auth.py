@@ -220,6 +220,9 @@ def test_the_session_key_never_appears_in_a_response(monkeypatch):
     monkeypatch.setattr(
         db, "get_user", lambda uid: {"id": uid, "lastfm_username": "ansdas", "created_at": None}
     )
+    # /me/scrobble-config reads settings too — unstubbed it would open a real
+    # connection to Neon, which no test may do.
+    monkeypatch.setattr(db, "get_scrobble_config", lambda uid: {})
     client.cookies.set(session.COOKIE_NAME, session.sign({"uid": "user-1"}))
     try:
         for path in ("/me", "/me/scrobble-config"):

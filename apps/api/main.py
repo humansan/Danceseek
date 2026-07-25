@@ -13,6 +13,9 @@ only if/when the managed-browser backend does.
 
 from __future__ import annotations
 
+import time
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -29,7 +32,77 @@ from soundseek.lastfm import submit
 from soundseek.models import Setlist
 from soundseek.scrobble.windows import ScrobbleConfig, WindowSet, build_windows
 
-app = FastAPI(title="Danceseek API", version="0.3.0")
+# ---------------------------------------------------------------------------
+# Deployment guards
+# ---------------------------------------------------------------------------
+
+
+def config_report() -> dict[str, list[str]]:
+    """What's missing, split by how badly it hurts.
+
+    Read-only browse works with just a database, so a missing Last.fm secret
+    shouldn't stop the service booting — those endpoints already answer 503.
+    A missing DATABASE_URL means nothing works at all.
+    """
+    import os
+
+    fatal, warn = [], []
+    if not os.environ.get("DATABASE_URL"):
+        fatal.append("DATABASE_URL — the catalog lives there; nothing can be served")
+    if not os.environ.get("SESSION_SECRET"):
+        warn.append("SESSION_SECRET — sign-in will fail until this is set")
+    if not os.environ.get("LASTFM_API_KEY") or not os.environ.get("LASTFM_SECRET"):
+        warn.append("LASTFM_API_KEY / LASTFM_SECRET — Last.fm connect and scrobbling disabled")
+    if settings.web_url.startswith("http://localhost"):
+        warn.append(
+            f"SOUNDSEEK_WEB_URL is still {settings.web_url} — the Last.fm callback and the "
+            "session cookie's Secure flag both derive from it"
+        )
+    return {"fatal": fatal, "warn": warn}
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Fail fast on a broken deployment, and say exactly what's missing."""
+    report = config_report()
+    for line in report["warn"]:
+        print(f"danceseek: WARNING  {line}", flush=True)
+    if report["fatal"]:
+        for line in report["fatal"]:
+            print(f"danceseek: FATAL    {line}", flush=True)
+        raise RuntimeError("; ".join(report["fatal"]))
+    try:
+        yield
+    finally:
+        db.close_pool()
+
+
+app = FastAPI(title="Danceseek API", version="1.0.0", lifespan=lifespan)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting — only the endpoints that spend someone else's quota or write
+# to a user's account. In-memory and per-process, which is honest for a service
+# that deliberately stores no scrobble state; behind multiple replicas each gets
+# its own allowance. Read endpoints are left to the platform edge.
+# ---------------------------------------------------------------------------
+
+_HITS: dict[str, deque[float]] = defaultdict(deque)
+
+
+def rate_limit(key: str, limit: int, window_s: int) -> None:
+    """Sliding window. Raises 429 with a Retry-After when the caller is over."""
+    now = time.monotonic()
+    hits = _HITS[key]
+    while hits and now - hits[0] > window_s:
+        hits.popleft()
+    if len(hits) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail="slow down — too many scrobbles in a short window",
+            headers={"Retry-After": str(int(window_s - (now - hits[0])) + 1)},
+        )
+    hits.append(now)
 
 # The browser normally reaches us through the web app's /api/* rewrite (same
 # origin, so the session cookie just works). CORS with credentials is here for
@@ -394,6 +467,7 @@ def _find_window(windows, position: int, component_index: int | None):
 def now_playing(body: ScrobbleTarget, user_id: str | None = Depends(current_user_id)) -> ScrobbleResult:
     """Flag what's playing. Not a play — no dedupe, nothing recorded."""
     uid = _require_user(user_id)
+    rate_limit(f"nowplaying:{uid}", limit=120, window_s=300)
     ws = _windows_for_user(body.setlist_id, uid, body.duration)
     window = _find_window(ws.windows, body.position, body.component_index)
     if window is None:
@@ -418,8 +492,11 @@ def now_playing(body: ScrobbleTarget, user_id: str | None = Depends(current_user
 
 @app.post("/scrobble", response_model=ScrobbleResult)
 def scrobble_one(body: ScrobbleTarget, user_id: str | None = Depends(current_user_id)) -> ScrobbleResult:
-    """Scrobble the track at a position. Idempotent within a playback session."""
+    """Scrobble the track at a position."""
     uid = _require_user(user_id)
+    # A dense set is ~1 scrobble/minute; 60 per 5 min is far above real
+    # listening and far below anything that would look like abuse to Last.fm.
+    rate_limit(f"scrobble:{uid}", limit=60, window_s=300)
     ws = _windows_for_user(body.setlist_id, uid, body.duration)
     window = _find_window(ws.windows, body.position, body.component_index)
     if window is None:
@@ -475,6 +552,9 @@ def scrobble_whole_set(
     future.
     """
     uid = _require_user(user_id)
+    # Each call can submit 50+ plays, so this one is deliberately tight.
+    rate_limit(f"scrobbleset:{uid}", limit=10, window_s=3600)
+
     ws = _windows_for_user(setlist_id, uid, body.duration)
     key = db.session_key_for(uid)
     if not key:

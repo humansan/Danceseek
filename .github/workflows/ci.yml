@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # No DATABASE_URL: every test stubs the database, and a test that reaches
+      # for Neon should fail here rather than quietly pass against live data.
+      - run: uv run pytest -q
+
+  api-image:
+    name: api installs without the scraper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # Guards the deploy contract: the server image must build and import with
+      # only the `api` group — no Playwright, no LangChain, no CLI.
+      - run: uv sync --frozen --no-default-groups --group api
+      - run: uv run --no-sync python -c "from apps.api.main import app; print(len(app.openapi()['paths']), 'routes')"
+
+  web:
+    name: next build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci || npm install
+      - run: npm run build

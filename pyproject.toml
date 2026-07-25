@@ -3,32 +3,49 @@ name = "soundseek"
 version = "0.1.0"
 description = "SoundSeek v0 - 1001tracklists setlist ingestor"
 requires-python = ">=3.12"
+# The shared core, and nothing more: models, config, db, session, Last.fm and
+# cue windows. This is all the deployed API needs — it imports no scraper, no
+# LLM and no CLI (asserted by tests/test_api_surface.py). Everything heavier is
+# a group below, so the server image doesn't carry a browser it never opens.
 dependencies = [
-    "langchain>=0.3",
-    "langchain-openrouter>=0.1",
-    "playwright>=1.49",
-    "beautifulsoup4>=4.12",
-    "lxml>=5.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
-    "typer>=0.15",
-    "rich>=13.0",
+    "python-dotenv>=1.0",
     "httpx>=0.27",
-    "yt-dlp>=2025.1.1",
     "psycopg[binary]>=3.2",
-    "alembic>=1.14",
+    "psycopg-pool>=3.3.1",
 ]
 
 [project.scripts]
 soundseek = "soundseek.cli:app"
 
 [dependency-groups]
-dev = [
-    "pytest>=8.0",
+# Scraping + LLM normalization + platform search. Maintainer machine only.
+ingest = [
+    "langchain>=0.3",
+    "langchain-openrouter>=0.1",
+    "playwright>=1.49",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "yt-dlp>=2025.1.1",
 ]
+cli = [
+    "typer>=0.15",
+    "rich>=13.0",
+]
+# What the deployed service installs: uv sync --no-default-groups --group api
 api = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
+    "alembic>=1.14",
+]
+# Local development is everything, so `uv run pytest` and `uv run soundseek`
+# keep working with no extra flags.
+dev = [
+    "pytest>=8.0",
+    { include-group = "ingest" },
+    { include-group = "cli" },
+    { include-group = "api" },
 ]
 
 [build-system]

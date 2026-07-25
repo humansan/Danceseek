@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from typing import Any
 
 from .models import Setlist
@@ -92,21 +93,100 @@ def from_row(row: tuple) -> Setlist:
     return Setlist.model_validate(data)
 
 
-def _connect():
+# The bootstrap DDL only has to run once per process — re-running it on every
+# connection cost a round trip per request. Schema changes go through Alembic;
+# this is just the "works on a fresh database" safety net.
+_DDL_APPLIED = False
+
+# Opening a connection to Neon costs ~550ms from here (TLS + auth) against a
+# ~130ms query — roughly 80% of every call was handshake. The pool keeps
+# connections warm so that cost is paid once per worker, not once per request.
+_pool = None
+_pool_lock = threading.Lock()
+
+
+class _Pooled:
+    """A pooled connection that behaves like a plain one.
+
+    Every call site in this module ends with `conn.close()`; here that returns
+    the connection to the pool instead of dropping it, so the existing code
+    keeps working unchanged. `with conn:` still commits (or rolls back) exactly
+    as psycopg3 does, then releases.
+    """
+
+    __slots__ = ("_conn", "_pool", "_released")
+
+    def __init__(self, pool, conn) -> None:
+        self._pool, self._conn, self._released = pool, conn, False
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def close(self) -> None:
+        if not self._released:
+            self._released = True
+            self._pool.putconn(self._conn)  # rolls back any open transaction
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc_type is None:
+            self._conn.commit()
+        else:
+            self._conn.rollback()
+        self.close()
+        return False
+
+
+def _get_pool():
+    global _pool
+    if _pool is not None:
+        return _pool
     url = os.environ.get("DATABASE_URL", "")
     if not url:
         raise DbError("DATABASE_URL not set in .env — add your Neon connection string.")
-    import psycopg  # lazy: only needed when the db is actually used
+    with _pool_lock:
+        if _pool is None:
+            from psycopg_pool import ConnectionPool
 
+            try:
+                # autocommit: every statement here is self-contained, so an
+                # implicit transaction would only mean the pool rolling one back
+                # on every release — an extra round trip per request. Anything
+                # that needs atomicity opens `with conn.transaction():` itself
+                # (see claim_job).
+                _pool = ConnectionPool(
+                    url, min_size=1, max_size=10, timeout=15, open=True,
+                    kwargs={"autocommit": True},
+                )
+            except Exception as e:
+                raise DbError(f"Could not connect to database: {e}") from e
+    return _pool
+
+
+def close_pool() -> None:
+    """Release pooled connections — call on service shutdown."""
+    global _pool
+    if _pool is not None:
+        _pool.close()
+        _pool = None
+
+
+def _connect():
+    global _DDL_APPLIED
+
+    pool = _get_pool()
     try:
-        conn = psycopg.connect(url)
+        conn = _Pooled(pool, pool.getconn())
     except Exception as e:
         raise DbError(f"Could not connect to database: {e}") from e
-    # NOTE: `with conn:` would CLOSE the connection on exit (psycopg3 semantics),
-    # so run the idempotent DDL with an explicit commit instead.
-    with conn.cursor() as cur:
-        cur.execute(DDL)
-    conn.commit()
+
+    if not _DDL_APPLIED:
+        with conn.cursor() as cur:
+            cur.execute(DDL)
+        conn.commit()
+        _DDL_APPLIED = True  # a race here just repeats harmless idempotent DDL
     return conn
 
 
@@ -431,7 +511,9 @@ def claim_job() -> dict[str, Any] | None:
     """
     conn = _connect()
     try:
-        with conn.cursor() as cur:
+        # The row lock must survive until the UPDATE, so this one genuinely
+        # needs a transaction — the pool runs autocommit by default.
+        with conn.transaction(), conn.cursor() as cur:
             cur.execute(
                 "SELECT id, type, setlist_id, payload, attempts FROM jobs "
                 "WHERE status = 'queued' "
@@ -440,14 +522,12 @@ def claim_job() -> dict[str, Any] | None:
             )
             row = cur.fetchone()
             if row is None:
-                conn.rollback()
                 return None
             cur.execute(
                 "UPDATE jobs SET status = 'running', started_at = now(), "
                 "attempts = attempts + 1 WHERE id = %s",
                 (row[0],),
             )
-        conn.commit()
         payload = json.loads(row[3]) if isinstance(row[3], str) else row[3]
         return {
             "id": row[0],
