@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { TheatreSlot } from "@/components/player/PlayerSurface";
 import { getCues, getSetlist } from "@/lib/api";
-import { LoadSet, NowPlaying, TrackList } from "./SetClient";
+import { LoadSet, NowPlaying, ScrobbleActions, TrackList } from "./SetClient";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +62,7 @@ export default async function SetlistPage({ params }: { params: Promise<{ id: st
       <h1 className="mt-5 font-sans text-lg font-semibold leading-snug">{s.title}</h1>
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_260px]">
-        <TrackList tracks={tracks} cues={cues} />
+        <TrackList tracks={tracks} cues={cues} title={s.title ?? "set"} />
 
         <aside className="order-first lg:order-last">
           <div className="border border-border bg-surface p-3">
@@ -74,16 +74,27 @@ export default async function SetlistPage({ params }: { params: Promise<{ id: st
                 {cov.unreleased ? ` · ${cov.unreleased} ID` : ""}
               </span>
             </div>
+            {/* Per-platform counts. `platforms` is what the run actually
+                searched, so a 0 reads as "never tried" rather than "no match". */}
             {cov.platforms?.length ? (
-              <div className="mt-1 font-mono text-[11px] text-dim">
-                searched: {cov.platforms.join(", ")}
+              <div className="mt-2 border-t border-border/60 pt-2 font-mono text-[11px]">
+                {(["spotify", "youtube", "lastfm"] as const).map((p) => {
+                  const searched = cov.platforms?.includes(p);
+                  const n = (cov[p] as number | undefined) ?? 0;
+                  return (
+                    <div key={p} className="flex justify-between">
+                      <span className="text-dim">{p}</span>
+                      <span className={searched ? (n ? "text-ok" : "text-warn") : "text-border"}>
+                        {searched ? `${n}/${tracks.length}` : "not searched"}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
 
             <div className="mt-3 flex flex-col gap-1.5">
-              <button className="border border-border px-2 py-1.5 text-left font-mono text-xs text-dim hover:text-fg">
-                scrobble ▸
-              </button>
+              <ScrobbleActions liveCapable={cues?.live_capable ?? false} />
               <button
                 className="border border-border px-2 py-1.5 text-left font-mono text-xs text-dim disabled:opacity-50"
                 disabled={status !== "resolved"}

@@ -137,8 +137,34 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Setlists */
+        /**
+         * List Setlists
+         * @description Browse rows. Filters repeat to multi-select: `?dj=A&dj=B` matches either.
+         *
+         *     There's no total count — callers asking for `limit + 1` and checking whether
+         *     they got it is enough to drive a "load more", and avoids a second query.
+         */
         get: operations["list_setlists_setlists_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/facets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Facets
+         * @description What the filter chips can offer, counted over the whole catalog.
+         */
+        get: operations["list_facets_facets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -177,9 +203,94 @@ export interface paths {
          *
          *     The client reports the player's duration; everything else is derived here so
          *     the highlight and the scrobbler can never disagree about what's playing.
+         *     Eligibility reflects the signed-in user's settings, so the tracklist shows
+         *     exactly what would be scrobbled.
          */
         get: operations["setlist_cues_setlists__setlist_id__cues_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scrobble/now-playing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Now Playing
+         * @description Flag what's playing. Not a play — no dedupe, nothing recorded.
+         */
+        post: operations["now_playing_scrobble_now_playing_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scrobble": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scrobble One
+         * @description Scrobble the track at a position. Idempotent within a playback session.
+         */
+        post: operations["scrobble_one_scrobble_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/setlists/{setlist_id}/scrobble-set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scrobble Whole Set
+         * @description Log the whole set in one action.
+         *
+         *     This is the mode that makes a set without cue times useful: timings are
+         *     estimated rather than exact, but the content and order are right. Timestamps
+         *     run from `started_at` (defaulting to just-finished) and never reach into the
+         *     future.
+         */
+        post: operations["scrobble_whole_set_setlists__setlist_id__scrobble_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/scrobble-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Scrobble Config */
+        get: operations["read_scrobble_config_me_scrobble_config_get"];
+        /** Write Scrobble Config */
+        put: operations["write_scrobble_config_me_scrobble_config_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -299,6 +410,27 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** Facet */
+        Facet: {
+            /** Value */
+            value: string;
+            /** Count */
+            count: number;
+        };
+        /**
+         * Facets
+         * @description Everything the filter chips offer, counted across the whole catalog.
+         */
+        Facets: {
+            /** Djs */
+            djs: components["schemas"]["Facet"][];
+            /** Genres */
+            genres: components["schemas"]["Facet"][];
+            /** Events */
+            events: components["schemas"]["Facet"][];
+            /** Years */
+            years: components["schemas"]["Facet"][];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -415,6 +547,84 @@ export interface components {
             notes?: string | null;
         };
         /**
+         * ScrobbleConfig
+         * @description What the user wants scrobbled (design §4.3). Defaults are the cautious
+         *     reading: log what you can stand behind, skip what would be noise.
+         */
+        ScrobbleConfig: {
+            /**
+             * Layered
+             * @default skip
+             * @enum {string}
+             */
+            layered: "scrobble" | "skip";
+            /**
+             * Mashups
+             * @default primary
+             * @enum {string}
+             */
+            mashups: "all" | "primary" | "skip";
+            /**
+             * Unreleased
+             * @default skip
+             * @enum {string}
+             */
+            unreleased: "scrobble" | "skip";
+            /**
+             * Unmatched
+             * @default scrobble
+             * @enum {string}
+             */
+            unmatched: "scrobble" | "skip";
+        };
+        /** ScrobbleResult */
+        ScrobbleResult: {
+            /** Scrobbled */
+            scrobbled: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Artist */
+            artist?: string | null;
+            /** Track */
+            track?: string | null;
+        };
+        /** ScrobbleSetRequest */
+        ScrobbleSetRequest: {
+            /** Duration */
+            duration?: number | null;
+            /** Started At */
+            started_at?: number | null;
+        };
+        /** ScrobbleSetResult */
+        ScrobbleSetResult: {
+            /** Submitted */
+            submitted: number;
+            /** Accepted */
+            accepted: number;
+            /** Skipped */
+            skipped: number;
+            /** Timing */
+            timing: string;
+            /**
+             * Problems
+             * @default []
+             */
+            problems: string[];
+        };
+        /** ScrobbleTarget */
+        ScrobbleTarget: {
+            /** Setlist Id */
+            setlist_id: string;
+            /** Position */
+            position: number;
+            /** Component Index */
+            component_index?: number | null;
+            /** Duration */
+            duration?: number | null;
+            /** Started At */
+            started_at?: number | null;
+        };
+        /**
          * Setlist
          * @description The persisted setlist record (future `Setlists` + `Setlist_Tracks` rows).
          */
@@ -494,6 +704,8 @@ export interface components {
             } | null;
             /** Created At */
             created_at: string | null;
+            /** Length S */
+            length_s?: number | null;
         };
         /**
          * SetlistTrack
@@ -567,6 +779,10 @@ export interface components {
         WindowSet: {
             /** Setlist Id */
             setlist_id: string;
+            /** Album */
+            album?: string | null;
+            /** Album Artist */
+            album_artist?: string | null;
             /**
              * Timing
              * @enum {string}
@@ -748,8 +964,10 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string | null;
-                dj?: string | null;
-                genre?: string | null;
+                dj?: string[] | null;
+                genre?: string[] | null;
+                event?: string[] | null;
+                year?: string[] | null;
                 limit?: number;
                 offset?: number;
             };
@@ -775,6 +993,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_facets_facets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Facets"];
                 };
             };
         };
@@ -820,7 +1058,9 @@ export interface operations {
             path: {
                 setlist_id: string;
             };
-            cookie?: never;
+            cookie?: {
+                ds_session?: string | null;
+            };
         };
         requestBody?: never;
         responses: {
@@ -831,6 +1071,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WindowSet"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    now_playing_scrobble_now_playing_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                ds_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScrobbleTarget"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScrobbleResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scrobble_one_scrobble_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                ds_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScrobbleTarget"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScrobbleResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scrobble_whole_set_setlists__setlist_id__scrobble_set_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                setlist_id: string;
+            };
+            cookie?: {
+                ds_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScrobbleSetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScrobbleSetResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_scrobble_config_me_scrobble_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                ds_session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScrobbleConfig"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    write_scrobble_config_me_scrobble_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                ds_session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScrobbleConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScrobbleConfig"];
                 };
             };
             /** @description Validation Error */

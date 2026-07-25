@@ -20,6 +20,7 @@ def test_the_surface_is_reads_plus_identity():
     assert PATHS == {
         "/health",
         "/setlists",
+        "/facets",
         "/setlists/{setlist_id}",
         "/setlists/{setlist_id}/cues",
         "/setlists/{setlist_id}/export",
@@ -28,6 +29,10 @@ def test_the_surface_is_reads_plus_identity():
         "/auth/lastfm/callback",
         "/auth/lastfm/complete",
         "/auth/logout",
+        "/me/scrobble-config",
+        "/scrobble",
+        "/scrobble/now-playing",
+        "/setlists/{setlist_id}/scrobble-set",
     }
 
 

@@ -241,21 +241,57 @@ def lookup_id(source_url: str) -> str | None:
         conn.close()
 
 
+# The set's length, taken as the last cue in the tracklist. The final track is
+# still playing after its cue, so this reads slightly short — close enough for a
+# browse card, and it needs no extra column (Armin: last cue 1:16:33 vs a real
+# 1:17:39).
+_LAST_CUE_SQL = """
+    (SELECT elem->>'cue_time'
+       FROM jsonb_array_elements(tracks) WITH ORDINALITY AS a(elem, ord)
+      WHERE elem->>'cue_time' IS NOT NULL
+      ORDER BY a.ord DESC LIMIT 1)
+"""
+
+
 def list_summaries(
-    limit: int = 50, offset: int = 0, q: str | None = None,
-    dj: str | None = None, genre: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    q: str | None = None,
+    dj: list[str] | None = None,
+    genre: list[str] | None = None,
+    event: list[str] | None = None,
+    year: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Card/browse rows: lightweight, newest first, with optional filters."""
-    where, params = [], []
+    """Card/browse rows: lightweight, newest first, with optional filters.
+
+    Filters are multi-select and OR within a facet / AND across facets: picking
+    two DJs widens the result, picking a DJ and a genre narrows it. Array
+    overlap (`&&`) is what makes the first part true, and it uses the existing
+    GIN indexes on dj_names/genres.
+    """
+    from .scrobble.windows import cue_seconds
+
+    where: list[str] = []
+    params: list[Any] = []
     if q:
-        where.append("(title ILIKE %s OR event ILIKE %s)")
-        params += [f"%{q}%", f"%{q}%"]
+        where.append(
+            "(title ILIKE %s OR event ILIKE %s "
+            " OR EXISTS (SELECT 1 FROM unnest(dj_names) d WHERE d ILIKE %s))"
+        )
+        params += [f"%{q}%", f"%{q}%", f"%{q}%"]
     if dj:
-        where.append("%s = ANY(dj_names)")
-        params.append(dj)
+        where.append("dj_names && %s")
+        params.append(list(dj))
     if genre:
-        where.append("%s = ANY(genres)")
-        params.append(genre)
+        where.append("genres && %s")
+        params.append(list(genre))
+    if event:
+        where.append("event = ANY(%s)")
+        params.append(list(event))
+    if year:
+        where.append("left(date_recorded, 4) = ANY(%s)")
+        params.append(list(year))
+
     clause = ("WHERE " + " AND ".join(where)) if where else ""
     params += [limit, offset]
     conn = _connect()
@@ -263,7 +299,8 @@ def list_summaries(
         with conn.cursor() as cur:
             cur.execute(
                 f"""SELECT id, title, dj_names, event, date_recorded, genres, media_url,
-                           jsonb_array_length(tracks), status, coverage, created_at
+                           jsonb_array_length(tracks), status, coverage, created_at,
+                           {_LAST_CUE_SQL}
                     FROM setlists {clause}
                     ORDER BY created_at DESC LIMIT %s OFFSET %s""",
                 params,
@@ -277,7 +314,39 @@ def list_summaries(
                 "date_recorded": r[4], "genres": r[5], "media_url": r[6],
                 "track_count": r[7], "status": r[8], "coverage": cov,
                 "created_at": str(r[10]) if r[10] else None,
+                "length_s": cue_seconds(r[11]),
             })
+        return out
+    finally:
+        conn.close()
+
+
+def facets() -> dict[str, list[dict[str, Any]]]:
+    """Distinct DJs / genres / events / years with counts, for the filter chips.
+
+    Aggregates over the whole table so the chips are correct regardless of which
+    page is on screen. Cheap at this size; if the catalog reaches thousands this
+    wants caching or a materialized view.
+    """
+    queries = {
+        "djs": "SELECT d AS v, count(*) FROM setlists, unnest(dj_names) d GROUP BY d",
+        "genres": "SELECT g AS v, count(*) FROM setlists, unnest(genres) g GROUP BY g",
+        "events": (
+            "SELECT event AS v, count(*) FROM setlists "
+            "WHERE event IS NOT NULL AND event <> '' GROUP BY event"
+        ),
+        "years": (
+            "SELECT left(date_recorded, 4) AS v, count(*) FROM setlists "
+            "WHERE date_recorded IS NOT NULL AND date_recorded <> '' GROUP BY 1"
+        ),
+    }
+    out: dict[str, list[dict[str, Any]]] = {}
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            for name, sql in queries.items():
+                cur.execute(f"{sql} ORDER BY count(*) DESC, v ASC LIMIT 100")
+                out[name] = [{"value": r[0], "count": r[1]} for r in cur.fetchall()]
         return out
     finally:
         conn.close()
@@ -466,6 +535,33 @@ def get_user(user_id: str) -> dict[str, Any] | None:
             "lastfm_username": row[1],
             "created_at": str(row[2]) if row[2] else None,
         }
+    finally:
+        conn.close()
+
+
+def get_scrobble_config(user_id: str) -> dict[str, Any]:
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT scrobble_config FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+        if row is None or row[0] is None:
+            return {}
+        return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    finally:
+        conn.close()
+
+
+def set_scrobble_config(user_id: str, config: dict[str, Any]) -> None:
+    from psycopg.types.json import Jsonb
+
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET scrobble_config = %s WHERE id = %s", (Jsonb(config), user_id)
+            )
+        conn.commit()
     finally:
         conn.close()
 

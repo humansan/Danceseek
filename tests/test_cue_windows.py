@@ -3,7 +3,12 @@
 import pytest
 
 from soundseek.models import LastfmMatch, ParserInfo, Resolution, Setlist, SetlistTrack
-from soundseek.scrobble.windows import MIN_WINDOW_S, build_windows, cue_seconds
+from soundseek.scrobble.windows import (
+    MIN_WINDOW_S,
+    ScrobbleConfig,
+    build_windows,
+    cue_seconds,
+)
 
 
 def _track(position, cue=None, artists=("A",), title="T", **kw) -> SetlistTrack:
@@ -180,7 +185,10 @@ def test_a_mashup_parent_is_never_scrobbled():
 
 
 def test_mashup_components_get_their_own_scrobbles_in_the_parents_window():
-    ws = build_windows(_setlist(_mashup_track(1, "0:00"), _track(2, "5:00")), 900)
+    ws = build_windows(
+        _setlist(_mashup_track(1, "0:00"), _track(2, "5:00")), 900,
+        ScrobbleConfig(mashups="all"),
+    )
     components = [w for w in ws.windows if w.component_index is not None]
 
     assert len(components) == 2
@@ -225,6 +233,102 @@ def test_a_window_shorter_than_the_lastfm_minimum_is_not_eligible():
 
 def test_a_track_with_no_title_is_not_scrobblable():
     track = SetlistTrack(position=1, cue_time="0:00", raw_text="???", artists=[])
+    w = build_windows(_setlist(track, _track(2, "5:00")), 900).windows[0]
+    assert w.eligible is False and w.reason == "no track name"
+
+
+# --- the set is the album ---------------------------------------------------
+
+
+def test_the_set_is_the_album_and_the_dj_its_artist():
+    sets = _setlist(_track(1, "0:00"), _track(2, "5:00"))
+    sets.title = "ISOKNOCK @ 4EVR FINALE, EDC Las Vegas 2025-05-17"
+    sets.dj_names = ["ISOKNOCK"]
+    ws = build_windows(sets, 900)
+
+    assert ws.album == "ISOKNOCK @ 4EVR FINALE, EDC Las Vegas 2025-05-17"
+    assert ws.album_artist == "ISOKNOCK"
+
+
+def test_the_album_artist_is_the_primary_dj_of_a_b2b():
+    """A joined string would be a literal artist nobody's page — same rule as
+    track artists."""
+    sets = _setlist(_track(1, "0:00"), _track(2, "5:00"))
+    sets.dj_names = ["Fred again..", "Sammy Virji"]
+    assert build_windows(sets, 900).album_artist == "Fred again.."
+
+
+def test_a_set_without_a_title_or_dj_has_no_album():
+    sets = _setlist(_track(1, "0:00"), _track(2, "5:00"))
+    sets.title = None
+    sets.dj_names = []
+    ws = build_windows(sets, 900)
+    assert ws.album is None and ws.album_artist is None
+
+
+# --- scrobble config (design §4.3) ------------------------------------------
+
+
+def test_defaults_are_the_cautious_reading():
+    c = ScrobbleConfig()
+    assert (c.layered, c.mashups, c.unreleased, c.unmatched) == (
+        "skip", "primary", "skip", "scrobble",
+    )
+
+
+def test_layered_rows_are_skipped_by_default_and_can_be_enabled():
+    sets = _setlist(_track(1, "0:00"), _track(2, "5:00", played_with=1), _track(3, "9:00"))
+
+    default = build_windows(sets, 900).windows[1]
+    assert default.eligible is False and "layered" in default.reason
+
+    on = build_windows(sets, 900, ScrobbleConfig(layered="scrobble")).windows[1]
+    assert on.eligible is True
+
+
+def test_only_the_primary_mashup_component_scrobbles_by_default():
+    ws = build_windows(_setlist(_mashup_track(1, "0:00"), _track(2, "5:00")), 900)
+    components = [w for w in ws.windows if w.component_index is not None]
+
+    assert components[0].eligible is True
+    assert components[1].eligible is False
+    assert "primary component only" in components[1].reason
+
+
+def test_mashups_can_be_skipped_entirely():
+    ws = build_windows(
+        _setlist(_mashup_track(1, "0:00"), _track(2, "5:00")), 900,
+        ScrobbleConfig(mashups="skip"),
+    )
+    assert not any(w.eligible for w in ws.windows if w.position == 1)
+
+
+def test_a_layered_mashup_skips_its_components_too():
+    """The row-level setting has to reach the components, or 'skip w/' leaks."""
+    track = _mashup_track(1, "0:00")
+    track.played_with = 0
+    ws = build_windows(_setlist(track, _track(2, "5:00")), 900)
+    assert not any(w.eligible for w in ws.windows if w.position == 1)
+
+
+def test_unmatched_tracks_can_be_skipped():
+    sets = _setlist(_track(1, "0:00"), _track(2, "5:00"))
+    assert build_windows(sets, 900).windows[0].eligible is True
+
+    strict = build_windows(sets, 900, ScrobbleConfig(unmatched="skip")).windows[0]
+    assert strict.eligible is False and "no Last.fm match" in strict.reason
+
+
+def test_skipping_unmatched_keeps_canonical_matches():
+    track = _track(1, "0:00")
+    track.resolution = Resolution(status="resolved", lastfm=LastfmMatch(artist="A", track="T"))
+    ws = build_windows(_setlist(track, _track(2, "5:00")), 900, ScrobbleConfig(unmatched="skip"))
+    assert ws.windows[0].eligible is True
+
+
+def test_a_track_with_no_artist_is_not_scrobblable():
+    """Last.fm needs both fields; a title alone would scrobble under no artist."""
+    track = SetlistTrack(position=1, cue_time="0:00", raw_text="? - Song", artists=[], title="Song")
     w = build_windows(_setlist(track, _track(2, "5:00")), 900).windows[0]
     assert w.eligible is False and w.reason == "no track name"
 

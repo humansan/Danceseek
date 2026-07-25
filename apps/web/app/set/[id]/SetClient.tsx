@@ -9,12 +9,83 @@
  * nested components for mashups, and the `▮▮▯` glyph on whatever is playing.
  */
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePlayer } from "@/components/player/PlayerProvider";
+import { useScrobble } from "@/components/player/ScrobbleProvider";
+import { keyOf } from "@/components/player/useScrobbler";
 import { formatTime } from "@/components/player/BottomBar";
+import { useKeyboardShortcuts } from "@/components/useKeyboardShortcuts";
+import { cueSeconds } from "@/lib/format";
 import type { CueWindow, Resolution, Track, WindowSet } from "@/lib/api";
 
-/** Hands the set to the app-wide player. Renders nothing. */
+/** Copy helper shared by the row actions, tracklist copy and share. */
+async function copy(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Plain-text tracklist (design §10) — the thing people paste into a chat. */
+export function tracklistText(tracks: Track[], title: string): string {
+  const lines = tracks.map((t) => {
+    const cue = t.cue_time ? `${t.cue_time}  ` : "";
+    if (t.is_id) return `${cue}ID - ID`;
+    const artists = (t.artists ?? []).join(", ");
+    const remix = t.remix ? ` (${t.remix})` : "";
+    return `${cue}${artists}${t.title ? ` - ${t.title}` : ""}${remix}`;
+  });
+  return [title, "", ...lines].join("\n");
+}
+
+/** `scrobble ▸` — live toggle plus the whole-set action (design §6.2). */
+export function ScrobbleActions({ liveCapable }: { liveCapable: boolean }) {
+  const { connected, enabled, setEnabled, scrobbleWholeSet, busy, setLogged } = useScrobble();
+  const [note, setNote] = useState<string | null>(null);
+
+  if (!connected) {
+    return (
+      <a
+        href="/api/auth/lastfm/start"
+        className="block border border-border px-2 py-1.5 text-left font-mono text-xs text-dim hover:border-accent hover:text-accent"
+      >
+        scrobble ▸ connect last.fm
+      </a>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button
+        onClick={() => setEnabled(!enabled)}
+        disabled={!liveCapable}
+        title={liveCapable ? undefined : "this set has no cue times — use whole set"}
+        className={`border px-2 py-1.5 text-left font-mono text-xs disabled:opacity-40 ${
+          enabled ? "border-ok text-ok" : "border-border text-dim hover:text-fg"
+        }`}
+      >
+        scrobble ▸ live {enabled ? "✓" : ""}
+      </button>
+      <button
+        onClick={async () => setNote(await scrobbleWholeSet())}
+        disabled={busy}
+        className="border border-border px-2 py-1.5 text-left font-mono text-xs text-dim hover:text-fg disabled:opacity-40"
+      >
+        {busy ? "scrobbling…" : setLogged ? "scrobble ▸ whole set again" : "scrobble ▸ whole set"}
+      </button>
+      {!liveCapable ? (
+        <div className="font-mono text-[10px] text-warn">
+          no cue times — whole set uses estimated timings
+        </div>
+      ) : null}
+      {note ? <div className="font-mono text-[10px] text-ok">{note}</div> : null}
+    </div>
+  );
+}
+
+/** Hands the set to the app-wide player, and honours a `?t=45:20` deep link. */
 export function LoadSet({
   setId,
   videoId,
@@ -26,7 +97,9 @@ export function LoadSet({
   title: string;
   cues: WindowSet | null;
 }) {
-  const { load } = usePlayer();
+  const { load, seek, ready } = usePlayer();
+  const seekedRef = useRef(false);
+
   useEffect(() => {
     if (!videoId) return;
     load({
@@ -37,6 +110,17 @@ export function LoadSet({
       liveCapable: cues?.live_capable ?? false,
     });
   }, [load, setId, videoId, title, cues]);
+
+  // Deep link (design §10). Waits for the player, and fires once.
+  useEffect(() => {
+    if (!ready || seekedRef.current) return;
+    const t = new URLSearchParams(window.location.search).get("t");
+    const at = cueSeconds(t) ?? (t && /^\d+$/.test(t) ? Number(t) : null);
+    if (at === null) return;
+    seekedRef.current = true;
+    seek(at);
+  }, [ready, seek]);
+
   return null;
 }
 
@@ -91,19 +175,93 @@ function Pills({ r }: { r: Resolution | null | undefined }) {
   );
 }
 
+/** Hover actions (design §5.2): copy the clean name, seek here, open elsewhere. */
+function RowActions({
+  t,
+  window,
+  onSeek,
+}: {
+  t: Track;
+  window: CueWindow | undefined;
+  onSeek: (seconds: number) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const r = t.resolution;
+  const name =
+    window?.scrobble_artist && window?.scrobble_track
+      ? `${window.scrobble_artist} - ${window.scrobble_track}`
+      : null;
+
+  const links: [string, string | null | undefined][] = [
+    ["S", r?.spotify?.url],
+    ["Y", r?.youtube?.url],
+    ["L", r?.lastfm?.url],
+  ];
+
+  return (
+    <span className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
+      {name ? (
+        <button
+          onClick={async () => {
+            if (await copy(name)) {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }
+          }}
+          title={`copy "${name}"`}
+          className="px-1 text-[10px] text-dim hover:text-accent"
+        >
+          {copied ? "✓" : "⧉"}
+        </button>
+      ) : null}
+      {window ? (
+        <button
+          onClick={() => onSeek(window.start_s)}
+          title={`seek to ${formatTime(window.start_s)}`}
+          className="px-1 text-[10px] text-dim hover:text-accent"
+        >
+          ▸
+        </button>
+      ) : null}
+      {links.map(([label, href]) =>
+        href ? (
+          <a
+            key={label}
+            href={href}
+            target="_blank"
+            rel="noreferrer noopener"
+            title={`open on ${label === "S" ? "Spotify" : label === "Y" ? "YouTube" : "Last.fm"}`}
+            className="px-0.5 text-[10px] text-dim hover:text-link"
+          >
+            ↗
+          </a>
+        ) : null,
+      )}
+    </span>
+  );
+}
+
 function Row({
   t,
   window,
   isCurrent,
   inWindow,
+  selected,
+  scrobbled,
   onSeek,
 }: {
   t: Track;
   window: CueWindow | undefined;
   isCurrent: boolean;
   inWindow: boolean;
+  selected: boolean;
+  scrobbled: Set<string>;
   onSeek: (seconds: number) => void;
 }) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (selected) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
   const r = t.resolution;
   const layered = t.played_with != null;
   const components = t.mashup_components ?? [];
@@ -112,11 +270,25 @@ function Row({
   return (
     <>
       <div
-        className={`flex items-baseline gap-3 border-b border-border/60 px-2 py-1.5 font-mono text-sm ${
+        ref={rowRef}
+        className={`group/row flex items-baseline gap-3 border-b border-border/60 px-2 py-1.5 font-mono text-sm ${
           inWindow ? "bg-surface-2" : "hover:bg-surface-2"
-        } ${layered ? "pl-6" : ""} ${noMatch ? "text-dim" : ""}`}
+        } ${selected ? "outline outline-1 -outline-offset-1 outline-accent/60" : ""} ${
+          layered ? "pl-6" : ""
+        } ${noMatch ? "text-dim" : ""}`}
       >
-        <span className="w-4 shrink-0 text-accent">{isCurrent ? "▮▮▯" : ""}</span>
+        <span
+          className={`w-4 shrink-0 ${scrobbled.has(keyOf(t.position, null)) ? "text-ok" : "text-accent"}`}
+          title={
+            scrobbled.has(keyOf(t.position, null))
+              ? "scrobbled"
+              : window?.eligible === false
+                ? `not scrobbled: ${window.reason}`
+                : undefined
+          }
+        >
+          {scrobbled.has(keyOf(t.position, null)) ? "✓" : isCurrent ? "▮▮▯" : ""}
+        </span>
         <button
           onClick={() => window && onSeek(window.start_s)}
           disabled={!window}
@@ -145,6 +317,7 @@ function Row({
             </>
           )}
         </span>
+        <RowActions t={t} window={window} onSeek={onSeek} />
         <Pills r={r} />
       </div>
 
@@ -166,9 +339,65 @@ function Row({
   );
 }
 
-export function TrackList({ tracks, cues }: { tracks: Track[]; cues: WindowSet | null }) {
-  const { currentIndex, seek } = usePlayer();
+/** Copy the tracklist / share a link, optionally at the current position. */
+function TracklistTools({ tracks, title }: { tracks: Track[]; title: string }) {
+  const { playhead } = usePlayer();
+  const [note, setNote] = useState<string | null>(null);
+
+  const flash = (text: string) => {
+    setNote(text);
+    setTimeout(() => setNote(null), 1500);
+  };
+
+  return (
+    <span className="flex items-center gap-2">
+      {note ? <span className="text-ok">{note}</span> : null}
+      <button
+        onClick={async () => flash((await copy(tracklistText(tracks, title))) ? "copied" : "failed")}
+        className="text-dim hover:text-fg"
+        title="copy the tracklist as plain text"
+      >
+        copy
+      </button>
+      <button
+        onClick={async () => {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("t");
+          flash((await copy(url.toString())) ? "link copied" : "failed");
+        }}
+        className="text-dim hover:text-fg"
+        title="copy a link to this set"
+      >
+        share
+      </button>
+      <button
+        onClick={async () => {
+          const url = new URL(window.location.href);
+          url.searchParams.set("t", formatTime(playhead));
+          flash((await copy(url.toString())) ? `link @ ${formatTime(playhead)}` : "failed");
+        }}
+        className="text-dim hover:text-fg"
+        title="copy a link that opens at the current position"
+      >
+        share @ time
+      </button>
+    </span>
+  );
+}
+
+export function TrackList({
+  tracks,
+  cues,
+  title,
+}: {
+  tracks: Track[];
+  cues: WindowSet | null;
+  title: string;
+}) {
+  const { currentIndex, seek, toggle } = usePlayer();
+  const { done, connected, enabled, setEnabled } = useScrobble();
   const windows = cues?.windows ?? [];
+  const [selected, setSelected] = useState<number | null>(null);
 
   // Mashup components share their parent's position and window, so the row map
   // keys off the parent windows only.
@@ -180,24 +409,59 @@ export function TrackList({ tracks, cues }: { tracks: Track[]; cues: WindowSet |
 
   const currentWindow = currentIndex >= 0 ? windows[currentIndex] : undefined;
 
+  // j/k walk the rows, ↵ seeks to the selected one (design §10).
+  const move = useCallback(
+    (delta: 1 | -1) =>
+      setSelected((i) => {
+        const next = i === null ? (currentIndex >= 0 ? currentIndex : 0) : i + delta;
+        return Math.min(tracks.length - 1, Math.max(0, next));
+      }),
+    [currentIndex, tracks.length],
+  );
+
+  const shortcuts = useMemo(
+    () => ({
+      j: () => move(1),
+      k: () => move(-1),
+      ArrowDown: () => move(1),
+      ArrowUp: () => move(-1),
+      space: toggle,
+      Enter: () => {
+        if (selected === null) return;
+        const w = byPosition.get(tracks[selected]?.position);
+        if (w) seek(w.start_s);
+      },
+      s: () => connected && setEnabled(!enabled),
+    }),
+    [move, toggle, selected, byPosition, tracks, seek, connected, enabled, setEnabled],
+  );
+  useKeyboardShortcuts(shortcuts);
+
   return (
     <section className="min-w-0 border border-border bg-surface">
-      <div className="flex items-center justify-between border-b border-border px-2 py-1.5 font-mono text-xs text-dim">
-        <span>tracklist · {tracks.length}</span>
-        {cues?.timing === "estimated" ? <span className="text-warn">timings estimated</span> : null}
+      <div className="flex items-center justify-between gap-3 border-b border-border px-2 py-1.5 font-mono text-xs text-dim">
+        <span className="shrink-0">
+          tracklist · {tracks.length}
+          {cues?.timing === "estimated" ? (
+            <span className="ml-2 text-warn">timings estimated</span>
+          ) : null}
+        </span>
+        <TracklistTools tracks={tracks} title={title} />
       </div>
       <div>
-        {tracks.map((t) => {
+        {tracks.map((t, i) => {
           const w = byPosition.get(t.position);
           return (
             <Row
               key={t.position}
               t={t}
               window={w}
+              selected={selected === i}
               isCurrent={!!currentWindow && currentWindow.position === t.position}
               inWindow={
                 !!currentWindow && !!w && w.start_s === currentWindow.start_s
               }
+              scrobbled={done}
               onSeek={seek}
             />
           );

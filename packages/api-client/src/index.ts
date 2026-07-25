@@ -14,6 +14,8 @@ export type PlatformMatch = Schemas["PlatformMatch"];
 export type ExportPreview = Schemas["ExportPreview"];
 export type CueWindow = Schemas["CueWindow"];
 export type WindowSet = Schemas["WindowSet"];
+export type Facet = Schemas["Facet"];
+export type Facets = Schemas["Facets"];
 
 /** The coverage column is a free JSONB dict on the API; these are the keys
  *  build_coverage() actually writes, typed as numbers for the UI. */
@@ -47,12 +49,33 @@ export function createApiClient(baseUrl: string): ApiClient {
   return createClient<paths>({ baseUrl });
 }
 
-export async function listSetlists(baseUrl: string): Promise<SetlistSummary[]> {
+/** Browse filters. Repeating a facet widens the result; facets combine with AND. */
+export type BrowseQuery = {
+  q?: string;
+  dj?: string[];
+  genre?: string[];
+  event?: string[];
+  year?: string[];
+  limit?: number;
+  offset?: number;
+};
+
+export async function listSetlists(
+  baseUrl: string,
+  query: BrowseQuery = {},
+): Promise<SetlistSummary[]> {
   const { data, error } = await createApiClient(baseUrl).GET("/setlists", {
+    params: { query },
     cache: "no-store",
   });
   if (error) throw new Error("GET /setlists failed");
   return (data ?? []) as SetlistSummary[];
+}
+
+export async function getFacets(baseUrl: string): Promise<Facets> {
+  const { data, error } = await createApiClient(baseUrl).GET("/facets", { cache: "no-store" });
+  if (error || !data) throw new Error("GET /facets failed");
+  return data as Facets;
 }
 
 export async function getSetlist(baseUrl: string, id: string): Promise<SetlistDetail | null> {

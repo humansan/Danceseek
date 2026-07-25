@@ -57,7 +57,8 @@ def credentials() -> tuple[str, str]:
     return key, secret
 
 
-def _signed_call(method: str, **params: str) -> dict:
+def signed_call(method: str, **params: str) -> dict:
+    """POST a signed call to Last.fm. Shared by auth and scrobble submission."""
     key, secret = credentials()
     payload = {"method": method, "api_key": key, **params}
     payload["api_sig"] = api_sig(payload, secret)
@@ -82,7 +83,7 @@ def _signed_call(method: str, **params: str) -> dict:
 
 def get_token() -> str:
     """Step 1: an unauthorized request token."""
-    token = _signed_call("auth.getToken").get("token")
+    token = signed_call("auth.getToken").get("token")
     if not token:
         raise LastfmAuthError("Last.fm returned no token")
     return token
@@ -100,7 +101,7 @@ def get_session(token: str) -> tuple[str, str]:
     Fails if the user declined or never approved — Last.fm reports that as
     error 14 (token not authorized) or 4 (invalid token).
     """
-    session = _signed_call("auth.getSession", token=token).get("session") or {}
+    session = signed_call("auth.getSession", token=token).get("session") or {}
     username, key = session.get("name"), session.get("key")
     if not username or not key:
         raise LastfmAuthError("Last.fm returned no session")

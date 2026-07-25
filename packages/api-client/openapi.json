@@ -227,6 +227,7 @@
     "/setlists": {
       "get": {
         "summary": "List Setlists",
+        "description": "Browse rows. Filters repeat to multi-select: `?dj=A&dj=B` matches either.\n\nThere's no total count — callers asking for `limit + 1` and checking whether\nthey got it is enough to drive a \"load more\", and avoids a second query.",
         "operationId": "list_setlists_setlists_get",
         "parameters": [
           {
@@ -252,7 +253,10 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 {
                   "type": "null"
@@ -268,13 +272,54 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 {
                   "type": "null"
                 }
               ],
               "title": "Genre"
+            }
+          },
+          {
+            "name": "event",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
             }
           },
           {
@@ -329,6 +374,25 @@
         }
       }
     },
+    "/facets": {
+      "get": {
+        "summary": "List Facets",
+        "description": "What the filter chips can offer, counted over the whole catalog.",
+        "operationId": "list_facets_facets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Facets"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/setlists/{setlist_id}": {
       "get": {
         "summary": "Get Setlist",
@@ -371,7 +435,7 @@
     "/setlists/{setlist_id}/cues": {
       "get": {
         "summary": "Setlist Cues",
-        "description": "Cue windows: which track is playing when, and under what name.\n\nThe client reports the player's duration; everything else is derived here so\nthe highlight and the scrobbler can never disagree about what's playing.",
+        "description": "Cue windows: which track is playing when, and under what name.\n\nThe client reports the player's duration; everything else is derived here so\nthe highlight and the scrobbler can never disagree about what's playing.\nEligibility reflects the signed-in user's settings, so the tracklist shows\nexactly what would be scrobbled.",
         "operationId": "setlist_cues_setlists__setlist_id__cues_get",
         "parameters": [
           {
@@ -401,6 +465,22 @@
               "title": "Duration"
             },
             "description": "Recording length in seconds, when known"
+          },
+          {
+            "name": "ds_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Session"
+            }
           }
         ],
         "responses": {
@@ -410,6 +490,286 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WindowSet"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scrobble/now-playing": {
+      "post": {
+        "summary": "Now Playing",
+        "description": "Flag what's playing. Not a play — no dedupe, nothing recorded.",
+        "operationId": "now_playing_scrobble_now_playing_post",
+        "parameters": [
+          {
+            "name": "ds_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrobbleTarget"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrobbleResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scrobble": {
+      "post": {
+        "summary": "Scrobble One",
+        "description": "Scrobble the track at a position. Idempotent within a playback session.",
+        "operationId": "scrobble_one_scrobble_post",
+        "parameters": [
+          {
+            "name": "ds_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrobbleTarget"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrobbleResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/setlists/{setlist_id}/scrobble-set": {
+      "post": {
+        "summary": "Scrobble Whole Set",
+        "description": "Log the whole set in one action.\n\nThis is the mode that makes a set without cue times useful: timings are\nestimated rather than exact, but the content and order are right. Timestamps\nrun from `started_at` (defaulting to just-finished) and never reach into the\nfuture.",
+        "operationId": "scrobble_whole_set_setlists__setlist_id__scrobble_set_post",
+        "parameters": [
+          {
+            "name": "setlist_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Setlist Id"
+            }
+          },
+          {
+            "name": "ds_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrobbleSetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrobbleSetResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/scrobble-config": {
+      "get": {
+        "summary": "Read Scrobble Config",
+        "operationId": "read_scrobble_config_me_scrobble_config_get",
+        "parameters": [
+          {
+            "name": "ds_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrobbleConfig"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Write Scrobble Config",
+        "operationId": "write_scrobble_config_me_scrobble_config_put",
+        "parameters": [
+          {
+            "name": "ds_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ds Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScrobbleConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrobbleConfig"
                 }
               }
             }
@@ -674,6 +1034,65 @@
           "reason"
         ],
         "title": "ExportSkippedItem"
+      },
+      "Facet": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "count"
+        ],
+        "title": "Facet"
+      },
+      "Facets": {
+        "properties": {
+          "djs": {
+            "items": {
+              "$ref": "#/components/schemas/Facet"
+            },
+            "type": "array",
+            "title": "Djs"
+          },
+          "genres": {
+            "items": {
+              "$ref": "#/components/schemas/Facet"
+            },
+            "type": "array",
+            "title": "Genres"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/Facet"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "years": {
+            "items": {
+              "$ref": "#/components/schemas/Facet"
+            },
+            "type": "array",
+            "title": "Years"
+          }
+        },
+        "type": "object",
+        "required": [
+          "djs",
+          "genres",
+          "events",
+          "years"
+        ],
+        "title": "Facets",
+        "description": "Everything the filter chips offer, counted across the whole catalog."
       },
       "HTTPValidationError": {
         "properties": {
@@ -960,6 +1379,211 @@
         "title": "Resolution",
         "description": "Outcome of resolving one track/component against the platforms.\n\nPrecision over recall: a platform field is populated ONLY when the match\ncleared the confidence threshold. Empty fields on bootlegs/edits are the\ncorrect outcome, not a failure (\"no_match\"). A null Resolution slot on a\ntrack means resolution was never attempted."
       },
+      "ScrobbleConfig": {
+        "properties": {
+          "layered": {
+            "type": "string",
+            "enum": [
+              "scrobble",
+              "skip"
+            ],
+            "title": "Layered",
+            "default": "skip"
+          },
+          "mashups": {
+            "type": "string",
+            "enum": [
+              "all",
+              "primary",
+              "skip"
+            ],
+            "title": "Mashups",
+            "default": "primary"
+          },
+          "unreleased": {
+            "type": "string",
+            "enum": [
+              "scrobble",
+              "skip"
+            ],
+            "title": "Unreleased",
+            "default": "skip"
+          },
+          "unmatched": {
+            "type": "string",
+            "enum": [
+              "scrobble",
+              "skip"
+            ],
+            "title": "Unmatched",
+            "default": "scrobble"
+          }
+        },
+        "type": "object",
+        "title": "ScrobbleConfig",
+        "description": "What the user wants scrobbled (design §4.3). Defaults are the cautious\nreading: log what you can stand behind, skip what would be noise."
+      },
+      "ScrobbleResult": {
+        "properties": {
+          "scrobbled": {
+            "type": "boolean",
+            "title": "Scrobbled"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "artist": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artist"
+          },
+          "track": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track"
+          }
+        },
+        "type": "object",
+        "required": [
+          "scrobbled"
+        ],
+        "title": "ScrobbleResult"
+      },
+      "ScrobbleSetRequest": {
+        "properties": {
+          "duration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "type": "object",
+        "title": "ScrobbleSetRequest"
+      },
+      "ScrobbleSetResult": {
+        "properties": {
+          "submitted": {
+            "type": "integer",
+            "title": "Submitted"
+          },
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted"
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped"
+          },
+          "timing": {
+            "type": "string",
+            "title": "Timing"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Problems",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "submitted",
+          "accepted",
+          "skipped",
+          "timing"
+        ],
+        "title": "ScrobbleSetResult"
+      },
+      "ScrobbleTarget": {
+        "properties": {
+          "setlist_id": {
+            "type": "string",
+            "title": "Setlist Id"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "component_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Component Index"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "setlist_id",
+          "position"
+        ],
+        "title": "ScrobbleTarget"
+      },
       "Setlist": {
         "properties": {
           "id": {
@@ -1216,6 +1840,17 @@
               }
             ],
             "title": "Created At"
+          },
+          "length_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length S"
           }
         },
         "type": "object",
@@ -1391,6 +2026,28 @@
           "setlist_id": {
             "type": "string",
             "title": "Setlist Id"
+          },
+          "album": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Album"
+          },
+          "album_artist": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Album Artist"
           },
           "timing": {
             "type": "string",

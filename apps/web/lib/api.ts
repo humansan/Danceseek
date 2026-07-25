@@ -5,10 +5,14 @@
 import {
   exportPreview as _exportPreview,
   getCues as _cues,
+  getFacets as _facets,
   getSetlist as _get,
   listSetlists as _list,
+  type BrowseQuery,
   type Coverage,
   type CueWindow,
+  type Facet,
+  type Facets,
   type WindowSet,
   type ExportPreview,
   type PlatformMatch,
@@ -22,8 +26,11 @@ import {
 const API_URL = process.env.API_URL ?? "http://127.0.0.1:8010";
 
 export type {
+  BrowseQuery,
   Coverage,
   CueWindow,
+  Facet,
+  Facets,
   WindowSet,
   ExportPreview,
   PlatformMatch,
@@ -35,8 +42,12 @@ export type {
 // Historical alias used by the setlist page (schema name is SetlistTrack).
 export type Track = SetlistTrack;
 
-export function listSetlists(): Promise<SetlistSummary[]> {
-  return _list(API_URL);
+export function listSetlists(query: BrowseQuery = {}): Promise<SetlistSummary[]> {
+  return _list(API_URL, query);
+}
+
+export function getFacets(): Promise<Facets> {
+  return _facets(API_URL);
 }
 
 export function getSetlist(id: string): Promise<SetlistDetail | null> {

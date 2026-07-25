@@ -9,6 +9,7 @@
 
 import Link from "next/link";
 import { usePlayer } from "./PlayerProvider";
+import { useScrobble } from "./ScrobbleProvider";
 import { usePlayerSlots } from "./slots";
 
 export function formatTime(seconds: number): string {
@@ -82,15 +83,19 @@ function Scrubber() {
             style={{ width: span ? `${Math.min(100, (playhead / span) * 100)}%` : "0%" }}
           />
         </div>
-        {/* track boundaries — the set's shape at a glance */}
+        {/* Track boundaries — the set's shape at a glance. Only real rows: a
+            mashup's components share their parent's position and window, so
+            including them would stack duplicate ticks on the same mark. */}
         {span
-          ? windows.map((w) => (
-              <span
-                key={w.position}
-                className="absolute top-1/2 h-2 w-px -translate-y-1/2 bg-border"
-                style={{ left: `${(w.start_s / span) * 100}%` }}
-              />
-            ))
+          ? windows
+              .filter((w) => w.component_index == null)
+              .map((w) => (
+                <span
+                  key={w.position}
+                  className="absolute top-1/2 h-2 w-px -translate-y-1/2 bg-border"
+                  style={{ left: `${(w.start_s / span) * 100}%` }}
+                />
+              ))
           : null}
       </div>
       <span className="w-12 shrink-0 font-mono text-[11px] text-dim">{formatTime(span)}</span>
@@ -130,17 +135,54 @@ export function BottomBar() {
         <Transport />
         <Scrubber />
 
-        {/* right — scrobble status (wired up in the scrobbling phase) */}
-        <div className="shrink-0 text-right font-mono text-[11px] text-dim">
-          {estimated ? (
-            <span title="this set has no cue times, so live scrobbling is unavailable">
-              timings estimated
-            </span>
-          ) : (
-            <span>scrobbling <span className="text-dim">off</span></span>
-          )}
-          <div className="text-[10px] text-border">{formatTime(playhead)} in</div>
-        </div>
+        <ScrobbleStatus estimated={estimated} />
+      </div>
+    </div>
+  );
+}
+
+/** Right side of the bar: the live scrobble toggle and its state (design §4.2). */
+function ScrobbleStatus({ estimated }: { estimated: boolean }) {
+  const { connected, enabled, setEnabled, done, lastError } = useScrobble();
+
+  if (!connected) {
+    return (
+      <div className="shrink-0 text-right font-mono text-[11px] text-dim">
+        <a href="/api/auth/lastfm/start" className="hover:text-link">
+          connect last.fm
+        </a>
+        <div className="text-[10px] text-border">to scrobble</div>
+      </div>
+    );
+  }
+
+  if (estimated) {
+    return (
+      <div
+        className="shrink-0 text-right font-mono text-[11px] text-warn"
+        title="this set has no cue times, so live scrobbling is unavailable — use scrobble ▸ whole set"
+      >
+        timings estimated
+        <div className="text-[10px] text-border">live sync off</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="shrink-0 text-right font-mono text-[11px]">
+      <button
+        onClick={() => setEnabled(!enabled)}
+        className={enabled ? "text-ok" : "text-dim hover:text-fg"}
+        title={enabled ? "live scrobbling on — click to stop" : "start live scrobbling"}
+      >
+        scrobbling {enabled ? "✓" : "off"}
+      </button>
+      <div className="text-[10px] text-border">
+        {lastError ? (
+          <span className="text-warn">{lastError}</span>
+        ) : (
+          `${done.size} logged`
+        )}
       </div>
     </div>
   );

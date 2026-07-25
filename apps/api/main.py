@@ -13,6 +13,7 @@ only if/when the managed-browser backend does.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import soundseek.config  # noqa: F401 — loads .env (DATABASE_URL etc.)
@@ -24,8 +25,9 @@ from pydantic import BaseModel
 from soundseek import db, session
 from soundseek.config import settings
 from soundseek.lastfm import auth as lastfm_auth
+from soundseek.lastfm import submit
 from soundseek.models import Setlist
-from soundseek.scrobble.windows import WindowSet, build_windows
+from soundseek.scrobble.windows import ScrobbleConfig, WindowSet, build_windows
 
 app = FastAPI(title="Danceseek API", version="0.3.0")
 
@@ -56,6 +58,22 @@ class SetlistSummary(BaseModel):
     status: str
     coverage: dict | None
     created_at: str | None
+    # Set length in seconds, from the last cue. None when a set has no cues.
+    length_s: int | None = None
+
+
+class Facet(BaseModel):
+    value: str
+    count: int
+
+
+class Facets(BaseModel):
+    """Everything the filter chips offer, counted across the whole catalog."""
+
+    djs: list[Facet]
+    genres: list[Facet]
+    events: list[Facet]
+    years: list[Facet]
 
 
 class SetlistDetail(BaseModel):
@@ -247,13 +265,28 @@ def logout(response: Response) -> Response:
 @app.get("/setlists", response_model=list[SetlistSummary])
 def list_setlists(
     q: str | None = None,
-    dj: str | None = None,
-    genre: str | None = None,
+    dj: list[str] | None = Query(None),
+    genre: list[str] | None = Query(None),
+    event: list[str] | None = Query(None),
+    year: list[str] | None = Query(None),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ) -> list[SetlistSummary]:
-    rows = db.list_summaries(limit=limit, offset=offset, q=q, dj=dj, genre=genre)
+    """Browse rows. Filters repeat to multi-select: `?dj=A&dj=B` matches either.
+
+    There's no total count — callers asking for `limit + 1` and checking whether
+    they got it is enough to drive a "load more", and avoids a second query.
+    """
+    rows = db.list_summaries(
+        limit=limit, offset=offset, q=q, dj=dj, genre=genre, event=event, year=year
+    )
     return [SetlistSummary(**row) for row in rows]
+
+
+@app.get("/facets", response_model=Facets)
+def list_facets() -> Facets:
+    """What the filter chips can offer, counted over the whole catalog."""
+    return Facets(**db.facets())
 
 
 @app.get("/setlists/{setlist_id}", response_model=SetlistDetail)
@@ -269,17 +302,238 @@ def get_setlist(setlist_id: str) -> SetlistDetail:
 def setlist_cues(
     setlist_id: str,
     duration: int | None = Query(None, ge=0, description="Recording length in seconds, when known"),
+    user_id: str | None = Depends(current_user_id),
 ) -> WindowSet:
     """Cue windows: which track is playing when, and under what name.
 
     The client reports the player's duration; everything else is derived here so
     the highlight and the scrobbler can never disagree about what's playing.
+    Eligibility reflects the signed-in user's settings, so the tracklist shows
+    exactly what would be scrobbled.
     """
     result = db.get_by_id(setlist_id)
     if result is None:
         raise HTTPException(status_code=404, detail="setlist not found")
     setlist, _meta = result
-    return build_windows(setlist, media_duration_s=duration)
+    config = _user_config(user_id) if user_id else ScrobbleConfig()
+    return build_windows(setlist, media_duration_s=duration, config=config)
+
+
+# ---------------------------------------------------------------------------
+# Scrobbling. The client reports a playhead and an intent; the server re-derives
+# the window, re-checks eligibility against the user's settings, and signs the
+# submission. A client that lies about what is playing still gets the window the
+# server computed.
+#
+# Nothing about a play is stored. There is no scrobble log and no dedupe table:
+# replaying a track is a second listen and should scrobble again, which is the
+# only thing a dedupe table would have prevented. The browser keeps enough state
+# for one page session to stop a single window firing twice while you sit in it.
+# ---------------------------------------------------------------------------
+
+
+class ScrobbleTarget(BaseModel):
+    setlist_id: str
+    position: int
+    component_index: int | None = None
+    # The player's reported length, so the server's last window matches the
+    # client's view of the recording.
+    duration: int | None = None
+    started_at: int | None = None  # unix seconds; defaults to "just now"
+
+
+class ScrobbleResult(BaseModel):
+    scrobbled: bool
+    reason: str | None = None
+    artist: str | None = None
+    track: str | None = None
+
+
+class ScrobbleSetRequest(BaseModel):
+    duration: int | None = None
+    started_at: int | None = None  # when the set began; defaults to just-finished
+
+
+class ScrobbleSetResult(BaseModel):
+    submitted: int
+    accepted: int
+    skipped: int
+    timing: str
+    problems: list[str] = []
+
+
+def _require_user(user_id: str | None) -> str:
+    if not user_id:
+        raise HTTPException(status_code=401, detail="connect Last.fm first")
+    return user_id
+
+
+def _user_config(user_id: str) -> ScrobbleConfig:
+    try:
+        return ScrobbleConfig(**(db.get_scrobble_config(user_id) or {}))
+    except Exception:
+        return ScrobbleConfig()  # a malformed stored config must not block scrobbling
+
+
+def _windows_for_user(setlist_id: str, user_id: str, duration: int | None):
+    result = db.get_by_id(setlist_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="setlist not found")
+    setlist, _meta = result
+    return build_windows(setlist, media_duration_s=duration, config=_user_config(user_id))
+
+
+def _find_window(windows, position: int, component_index: int | None):
+    for w in windows:
+        if w.position == position and w.component_index == component_index:
+            return w
+    return None
+
+
+@app.post("/scrobble/now-playing", response_model=ScrobbleResult)
+def now_playing(body: ScrobbleTarget, user_id: str | None = Depends(current_user_id)) -> ScrobbleResult:
+    """Flag what's playing. Not a play — no dedupe, nothing recorded."""
+    uid = _require_user(user_id)
+    ws = _windows_for_user(body.setlist_id, uid, body.duration)
+    window = _find_window(ws.windows, body.position, body.component_index)
+    if window is None:
+        raise HTTPException(status_code=404, detail="no such track in this set")
+    if not window.eligible:
+        return ScrobbleResult(scrobbled=False, reason=window.reason)
+
+    key = db.session_key_for(uid)
+    if not key:
+        raise HTTPException(status_code=401, detail="connect Last.fm first")
+    try:
+        submit.update_now_playing(
+            key, window.scrobble_artist, window.scrobble_track, window.duration_s,
+            album=ws.album, album_artist=ws.album_artist,
+        )
+    except submit.LastfmAuthError as e:
+        return ScrobbleResult(scrobbled=False, reason=str(e))
+    return ScrobbleResult(
+        scrobbled=False, artist=window.scrobble_artist, track=window.scrobble_track
+    )
+
+
+@app.post("/scrobble", response_model=ScrobbleResult)
+def scrobble_one(body: ScrobbleTarget, user_id: str | None = Depends(current_user_id)) -> ScrobbleResult:
+    """Scrobble the track at a position. Idempotent within a playback session."""
+    uid = _require_user(user_id)
+    ws = _windows_for_user(body.setlist_id, uid, body.duration)
+    window = _find_window(ws.windows, body.position, body.component_index)
+    if window is None:
+        raise HTTPException(status_code=404, detail="no such track in this set")
+    if not window.eligible:
+        return ScrobbleResult(scrobbled=False, reason=window.reason)
+
+    key = db.session_key_for(uid)
+    if not key:
+        raise HTTPException(status_code=401, detail="connect Last.fm first")
+
+    played_at = _played_at(body.started_at, window.duration_s)
+    try:
+        submit.scrobble(
+            key,
+            [
+                submit.Play(
+                    artist=window.scrobble_artist,
+                    track=window.scrobble_track,
+                    timestamp=int(played_at.timestamp()),
+                    album=ws.album,
+                    album_artist=ws.album_artist,
+                )
+            ],
+        )
+    except submit.LastfmAuthError as e:
+        return ScrobbleResult(scrobbled=False, reason=str(e))
+
+    return ScrobbleResult(
+        scrobbled=True, artist=window.scrobble_artist, track=window.scrobble_track
+    )
+
+
+def _played_at(started_at: int | None, window_s: int) -> datetime:
+    """When the play started, clamped to the past — Last.fm rejects the future."""
+    now = datetime.now(timezone.utc)
+    if started_at:
+        stamp = datetime.fromtimestamp(started_at, tz=timezone.utc)
+    else:
+        stamp = now - timedelta(seconds=min(window_s, 600))
+    return min(stamp, now)
+
+
+@app.post("/setlists/{setlist_id}/scrobble-set", response_model=ScrobbleSetResult)
+def scrobble_whole_set(
+    setlist_id: str, body: ScrobbleSetRequest, user_id: str | None = Depends(current_user_id)
+) -> ScrobbleSetResult:
+    """Log the whole set in one action.
+
+    This is the mode that makes a set without cue times useful: timings are
+    estimated rather than exact, but the content and order are right. Timestamps
+    run from `started_at` (defaulting to just-finished) and never reach into the
+    future.
+    """
+    uid = _require_user(user_id)
+    ws = _windows_for_user(setlist_id, uid, body.duration)
+    key = db.session_key_for(uid)
+    if not key:
+        raise HTTPException(status_code=401, detail="connect Last.fm first")
+
+    total = ws.duration_s or (ws.windows[-1].end_s if ws.windows else 0)
+    now = datetime.now(timezone.utc)
+    origin = (
+        datetime.fromtimestamp(body.started_at, tz=timezone.utc)
+        if body.started_at
+        else now - timedelta(seconds=total)
+    )
+
+    plays: list[submit.Play] = []
+    skipped = 0
+
+    for window in ws.windows:
+        if not window.eligible:
+            skipped += 1
+            continue
+        played_at = min(origin + timedelta(seconds=window.start_s), now)
+        plays.append(
+            submit.Play(
+                artist=window.scrobble_artist,
+                track=window.scrobble_track,
+                timestamp=int(played_at.timestamp()),
+                album=ws.album,
+                album_artist=ws.album_artist,
+            )
+        )
+
+    if not plays:
+        return ScrobbleSetResult(submitted=0, accepted=0, skipped=skipped, timing=ws.timing)
+
+    try:
+        result = submit.scrobble(key, plays)
+    except submit.LastfmAuthError as e:
+        raise HTTPException(status_code=502, detail=f"Last.fm rejected the batch: {e}") from e
+
+    return ScrobbleSetResult(
+        submitted=len(plays),
+        accepted=result.accepted,
+        skipped=skipped,
+        timing=ws.timing,
+        problems=[text for _, text in result.problems][:10],
+    )
+
+
+@app.get("/me/scrobble-config", response_model=ScrobbleConfig)
+def read_scrobble_config(user_id: str | None = Depends(current_user_id)) -> ScrobbleConfig:
+    return _user_config(_require_user(user_id))
+
+
+@app.put("/me/scrobble-config", response_model=ScrobbleConfig)
+def write_scrobble_config(
+    body: ScrobbleConfig, user_id: str | None = Depends(current_user_id)
+) -> ScrobbleConfig:
+    db.set_scrobble_config(_require_user(user_id), body.model_dump())
+    return body
 
 
 @app.post("/setlists/{setlist_id}/export", response_model=ExportPreview)

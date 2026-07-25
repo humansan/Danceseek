@@ -35,6 +35,20 @@ DEFAULT_TRACK_S = 300
 Timing = Literal["cue", "estimated"]
 
 
+class ScrobbleConfig(BaseModel):
+    """What the user wants scrobbled (design §4.3). Defaults are the cautious
+    reading: log what you can stand behind, skip what would be noise."""
+
+    # `w/` rows are layered over the track above — both are audible, but only
+    # one of them is what you'd say you listened to.
+    layered: Literal["scrobble", "skip"] = "skip"
+    # A mashup's parent row is never scrobbled; this is about its components.
+    mashups: Literal["all", "primary", "skip"] = "primary"
+    unreleased: Literal["scrobble", "skip"] = "skip"
+    # Tracks with no Last.fm match still scrobble under our normalized names.
+    unmatched: Literal["scrobble", "skip"] = "scrobble"
+
+
 class CueWindow(BaseModel):
     """One track's slice of the recording, plus how to name it."""
 
@@ -63,6 +77,13 @@ class WindowSet(BaseModel):
     """Every window for a setlist, plus what the caller may do with them."""
 
     setlist_id: str
+    # The set itself is the "album" every track in it is scrobbled under, so a
+    # play reads as "heard during this set" rather than as a loose single.
+    album: str | None = None
+    # Attributing the album to the DJ keeps one album entry for the set instead
+    # of one per track artist. Primary DJ only, for the same reason track
+    # artists are: a joined string would be a literal artist nobody's page.
+    album_artist: str | None = None
     timing: Timing
     # Live highlighting/scrobbling needs real cue times; estimated sets get
     # whole-set scrobbling only.
@@ -125,8 +146,10 @@ def _build(
     timing: Timing,
     component_index: int | None = None,
     fallback_label: str = "",
+    config: ScrobbleConfig | None = None,
     force_reason: str | None = None,
 ) -> CueWindow:
+    config = config or ScrobbleConfig()
     artist, name, canonical = _names(item)
     is_id = bool(getattr(item, "is_id", False))
 
@@ -140,10 +163,12 @@ def _build(
     eligible, reason = True, None
     if force_reason:
         eligible, reason = False, force_reason
-    elif is_id:
+    elif is_id and config.unreleased == "skip":
         eligible, reason = False, "unreleased"
-    elif not name:
+    elif not name or not artist:
         eligible, reason = False, "no track name"
+    elif not canonical and config.unmatched == "skip":
+        eligible, reason = False, "no Last.fm match (by setting)"
     elif end_s - start_s < MIN_WINDOW_S:
         eligible, reason = False, f"window under {MIN_WINDOW_S}s"
 
@@ -162,7 +187,17 @@ def _build(
     )
 
 
-def _windows_for(track: SetlistTrack, start_s: int, end_s: int, timing: Timing) -> list[CueWindow]:
+def _skip_reason(track: SetlistTrack, config: ScrobbleConfig) -> str | None:
+    """Config-driven reasons a whole row shouldn't scrobble — including its
+    components. (`is_id` is handled in _build, which sees components too.)"""
+    if track.played_with is not None and config.layered == "skip":
+        return "layered w/ (by setting)"
+    return None
+
+
+def _windows_for(
+    track: SetlistTrack, start_s: int, end_s: int, timing: Timing, config: ScrobbleConfig
+) -> list[CueWindow]:
     """A track's window — plus one per mashup component.
 
     A mashup's parent row is a blob ("A vs. B vs. C"), not a track anyone can
@@ -170,6 +205,8 @@ def _windows_for(track: SetlistTrack, start_s: int, end_s: int, timing: Timing) 
     and share the parent's slice of the recording.
     """
     components = getattr(track, "mashup_components", None) or []
+    row_skip = _skip_reason(track, config)
+
     parent = _build(
         track,
         position=track.position,
@@ -177,26 +214,45 @@ def _windows_for(track: SetlistTrack, start_s: int, end_s: int, timing: Timing) 
         end_s=end_s,
         timing=timing,
         fallback_label=track.raw_text,
-        force_reason="mashup — components scrobble separately" if components else None,
+        config=config,
+        force_reason=(
+            row_skip
+            or ("mashup — components scrobble separately" if components else None)
+        ),
     )
     if not components:
         return [parent]
 
-    return [parent] + [
-        _build(
-            component,
-            position=track.position,
-            component_index=index,
-            start_s=start_s,
-            end_s=end_s,
-            timing=timing,
+    windows = [parent]
+    for index, component in enumerate(components):
+        if row_skip:
+            reason = row_skip
+        elif config.mashups == "skip":
+            reason = "mashup (by setting)"
+        elif config.mashups == "primary" and index > 0:
+            reason = "mashup: primary component only (by setting)"
+        else:
+            reason = None
+        windows.append(
+            _build(
+                component,
+                position=track.position,
+                component_index=index,
+                start_s=start_s,
+                end_s=end_s,
+                timing=timing,
+                config=config,
+                force_reason=reason,
+            )
         )
-        for index, component in enumerate(components)
-    ]
+    return windows
 
 
 def _from_cues(
-    tracks: list[SetlistTrack], timed: list[tuple[int, int]], duration_s: int | None
+    tracks: list[SetlistTrack],
+    timed: list[tuple[int, int]],
+    duration_s: int | None,
+    config: ScrobbleConfig,
 ) -> list[CueWindow]:
     """Windows from real cue times; untimed rows inherit the window they sit in.
 
@@ -216,27 +272,42 @@ def _from_cues(
     for index, track in enumerate(tracks):
         if index in bounds:
             current = bounds[index]
-        windows.extend(_windows_for(track, current[0], current[1], "cue"))
+        windows.extend(_windows_for(track, current[0], current[1], "cue", config))
     return windows
 
 
-def _estimated(tracks: list[SetlistTrack], duration_s: int | None) -> list[CueWindow]:
+def _estimated(
+    tracks: list[SetlistTrack], duration_s: int | None, config: ScrobbleConfig
+) -> list[CueWindow]:
     """No cues anywhere: spread the tracks evenly across the recording."""
     count = len(tracks)
     total = duration_s if duration_s and duration_s > 0 else count * DEFAULT_TRACK_S
     step = total / count
     windows: list[CueWindow] = []
     for i, track in enumerate(tracks):
-        windows.extend(_windows_for(track, round(i * step), round((i + 1) * step), "estimated"))
+        windows.extend(
+            _windows_for(track, round(i * step), round((i + 1) * step), "estimated", config)
+        )
     return windows
 
 
-def build_windows(setlist: Setlist, media_duration_s: int | None = None) -> WindowSet:
-    """Cue windows for a setlist, in playing order."""
+def build_windows(
+    setlist: Setlist,
+    media_duration_s: int | None = None,
+    config: ScrobbleConfig | None = None,
+) -> WindowSet:
+    """Cue windows for a setlist, in playing order.
+
+    `config` decides what is *eligible*; every row still gets a window so the
+    UI can show why something will not be scrobbled.
+    """
+    config = config or ScrobbleConfig()
     tracks = sorted(setlist.tracks, key=lambda t: t.position)
     if not tracks:
         return WindowSet(
-            setlist_id=setlist.id, timing="estimated", live_capable=False,
+            setlist_id=setlist.id, album=setlist.title or None,
+            album_artist=(setlist.dj_names[0] if setlist.dj_names else None),
+            timing="estimated", live_capable=False,
             duration_s=media_duration_s or 0, windows=[],
         )
 
@@ -250,14 +321,16 @@ def build_windows(setlist: Setlist, media_duration_s: int | None = None) -> Wind
     timed = [pair for n, pair in enumerate(timed) if n == 0 or pair[1] >= timed[n - 1][1]]
 
     if timed:
-        windows = _from_cues(tracks, timed, media_duration_s)
+        windows = _from_cues(tracks, timed, media_duration_s, config)
         timing: Timing = "cue"
     else:
-        windows = _estimated(tracks, media_duration_s)
+        windows = _estimated(tracks, media_duration_s, config)
         timing = "estimated"
 
     return WindowSet(
         setlist_id=setlist.id,
+        album=setlist.title or None,
+        album_artist=(setlist.dj_names[0] if setlist.dj_names else None),
         timing=timing,
         live_capable=timing == "cue",
         duration_s=media_duration_s or (windows[-1].end_s if windows else 0),

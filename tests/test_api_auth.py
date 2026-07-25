@@ -213,7 +213,16 @@ def test_the_public_user_record_cannot_carry_the_session_key():
     assert "SELECT id, lastfm_username, created_at" in source
 
 
-def test_no_endpoint_reads_the_session_key():
-    import inspect
-
-    assert "session_key_for" not in inspect.getsource(main)
+def test_the_session_key_never_appears_in_a_response(monkeypatch):
+    """The scrobbler does read the key server-side (to sign submissions) — the
+    invariant is that it never travels back to the browser."""
+    monkeypatch.setattr(db, "session_key_for", lambda uid: "SUPER-SECRET-KEY")
+    monkeypatch.setattr(
+        db, "get_user", lambda uid: {"id": uid, "lastfm_username": "ansdas", "created_at": None}
+    )
+    client.cookies.set(session.COOKIE_NAME, session.sign({"uid": "user-1"}))
+    try:
+        for path in ("/me", "/me/scrobble-config"):
+            assert "SUPER-SECRET-KEY" not in client.get(path).text
+    finally:
+        client.cookies.clear()
