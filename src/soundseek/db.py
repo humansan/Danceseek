@@ -156,9 +156,38 @@ def _get_pool():
                 # on every release — an extra round trip per request. Anything
                 # that needs atomicity opens `with conn.transaction():` itself
                 # (see claim_job).
+                #
+                # The rest of this is all about one thing: Neon hangs up on idle
+                # connections (the compute autosuspends), and the pool has no way
+                # to know. A pooled connection that has been sitting since the
+                # last request is very likely already dead, and handing it out
+                # raises "SSL connection has been closed unexpectedly" on the
+                # first query — which looked exactly like the API cold-starting
+                # after a quiet spell. So:
+                #   check        — ping before handing a connection out; a dead
+                #                  one is discarded and replaced transparently,
+                #                  which is what actually fixes the bug.
+                #   max_lifetime — retire connections well inside Neon's idle
+                #                  window instead of nursing stale ones.
+                #   max_idle     — let the pool shrink back to min_size.
+                #   keepalives   — keep the TCP session alive through Neon's
+                #                  proxy so it is less likely to die at all.
                 _pool = ConnectionPool(
-                    url, min_size=1, max_size=10, timeout=15, open=True,
-                    kwargs={"autocommit": True},
+                    url,
+                    min_size=1,
+                    max_size=10,
+                    timeout=15,
+                    open=True,
+                    check=ConnectionPool.check_connection,
+                    max_lifetime=300,
+                    max_idle=120,
+                    kwargs={
+                        "autocommit": True,
+                        "keepalives": 1,
+                        "keepalives_idle": 30,
+                        "keepalives_interval": 10,
+                        "keepalives_count": 3,
+                    },
                 )
             except Exception as e:
                 raise DbError(f"Could not connect to database: {e}") from e
