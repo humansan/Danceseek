@@ -1,11 +1,11 @@
-# SoundSeek
+# Danceseek (formerly Soundseek)
 
 ![](/danceseek-img.webp)
 
 A browsable catalog of DJ sets that scrobbles to Last.fm as you listen.
 
 A tracklist page tells you what was played, but the text is often messy — `ID - ID`, bootlegs,
-`A vs. B` mashups, artist credits glued together six different ways. SoundSeek normalizes that
+`A vs. B` mashups, artist credits glued together six different ways. Danceseek normalizes that
 into structured tracks, matches each one against **Last.fm records**, and plays the set back in the browser with the tracklist
 synced to the video. Sit through a track and it scrobbles, under a consistent names the scrobbler
 recognizes.
