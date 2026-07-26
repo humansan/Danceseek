@@ -2,7 +2,7 @@
 
 ![](/danceseek-img.webp)
 
-A browsable catalog of DJ sets that scrobbles to Last.fm as you listen.
+A normalized and matched mix/set player that scrobbles to Last.fm as you listen.
 
 A tracklist page tells you what was played, but the text is often messy — `ID - ID`, bootlegs,
 `A vs. B` mashups, artist credits glued together six different ways. Danceseek normalizes that
