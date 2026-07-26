@@ -1,5 +1,7 @@
 # SoundSeek
 
+![](/danceseek-img.webp)
+
 A browsable catalog of DJ sets that scrobbles to Last.fm as you listen.
 
 A 1001tracklists page tells you what was played, but the text is messy — `ID - ID`, bootlegs,
